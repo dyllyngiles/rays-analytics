@@ -1,0 +1,3 @@
+{
+    "dbt.dbtPythonPathOverride": "/Users/dyllyngiles/projects/rays-analytics/.venv/bin/python3"
+}

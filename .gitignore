@@ -1,0 +1,23 @@
+# dbt
+target/
+dbt_packages/
+logs/
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Environment
+.env
+.venv/
+
+# dbt profiles (credentials live outside repo, but just in case)
+profiles.yml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
