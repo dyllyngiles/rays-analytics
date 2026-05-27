@@ -3,6 +3,7 @@ import requests
 
 # Connect to DuckDB
 con = duckdb.connect('/Users/dyllyngiles/projects/rays-analytics/dev.duckdb')
+con.execute("CREATE SCHEMA IF NOT EXISTS raw")
 
 # Tampa Bay Rays team ID in the MLB Stats API
 RAYS_TEAM_ID = 139
@@ -46,9 +47,8 @@ def load_games(season: int):
     print(f"  Found {len(games)} games")
     
     # Load into DuckDB
-    # Load into DuckDB
     con.execute("""
-        CREATE TABLE IF NOT EXISTS raw_games (
+        CREATE TABLE IF NOT EXISTS raw.games (
             game_pk INTEGER PRIMARY KEY,
             game_date VARCHAR,
             season INTEGER,
@@ -65,7 +65,7 @@ def load_games(season: int):
     """)
     
     con.executemany("""
-    INSERT INTO raw_games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO raw.games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (game_pk) DO UPDATE SET
         game_date = excluded.game_date,
         season = excluded.season,
@@ -80,7 +80,7 @@ def load_games(season: int):
         venue_name = excluded.venue_name
 """, [list(g.values()) for g in games])
     
-    print(f"  Loaded {len(games)} rows into raw_games")
+    print(f"  Loaded {len(games)} rows into raw.games")
 
 if __name__ == "__main__":
     # Load last 3 seasons
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         load_games(season)
     
     # Quick check
-    result = con.execute("SELECT season, COUNT(*) as games FROM raw_games GROUP BY season ORDER BY season").fetchall()
+    result = con.execute("SELECT season, COUNT(*) as games FROM raw.games GROUP BY season ORDER BY season").fetchall()
     print("\nLoaded data summary:")
     for row in result:
         print(f"  {row[0]}: {row[1]} games")

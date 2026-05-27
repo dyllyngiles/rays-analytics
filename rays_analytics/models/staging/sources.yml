@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: mlb
+    description: Raw MLB Stats API data loaded via Python
+    schema: raw
+    tables:
+      - name: games
+        description: Raw game schedule and results for Tampa Bay Rays, 2022-2024
+        columns:
+          - name: game_pk
+            description: Unique MLB game identifier
+          - name: game_date
+            description: Game start datetime in UTC, stored as VARCHAR
+          - name: season
+            description: MLB season year
+          - name: home_team_id
+            description: MLB team ID for the home team
+          - name: home_team_name
+            description: Full name of the home team
+          - name: away_team_id
+            description: MLB team ID for the away team
+          - name: away_team_name
+            description: Full name of the away team
+          - name: home_score
+            description: Final score for the home team
+          - name: away_score
+            description: Final score for the away team
+          - name: status
+            description: Final game status from MLB Stats API
+          - name: venue_id
+            description: MLB venue identifier
+          - name: venue_name
+            description: Name of the ballpark
