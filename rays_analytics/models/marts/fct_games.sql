@@ -28,10 +28,16 @@ final as (
         games.season,
 
         -- rays context
+        -- game location
         case
             when games.home_team_id = 139 then 'home'
             else 'away'
-        end                                             as rays_home_away,
+        end                                             as game_location,
+
+        case
+            when games.home_team_id = 139 then 1
+            else 0
+        end                                             as is_home_game,
 
         -- opponent
         case
