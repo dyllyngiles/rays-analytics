@@ -1,0 +1,140 @@
+version: 2
+
+models:
+  - name: dim_teams
+    description: >
+      Dimension table containing one row per MLB team that appears in the Rays schedule.
+      Derived from stg_games by unioning home and away teams. Covers all opponents
+      faced by the Rays across the 2022-2024 seasons plus the Rays themselves.
+    columns:
+      - name: team_id
+        description: MLB team identifier. Natural key from MLB Stats API.
+        tests:
+          - unique
+          - not_null
+
+      - name: team_name
+        description: Full team name as provided by the MLB Stats API.
+        tests:
+          - not_null
+
+  - name: dim_venues
+    description: >
+      Dimension table containing one row per venue that appears in the Rays schedule.
+      Derived from stg_games. Includes Tropicana Field and all away venues.
+    columns:
+      - name: venue_id
+        description: MLB venue identifier. Natural key from MLB Stats API.
+        tests:
+          - unique
+          - not_null
+
+      - name: venue_name
+        description: Full venue name as provided by the MLB Stats API.
+        tests:
+          - not_null
+
+  - name: fct_games
+    description: >
+      Fact table containing one row per Rays regular season game, 2022-2024.
+      Grain is one game. All measures are from the Rays perspective — runs scored,
+      runs allowed, win/loss. Joins to dim_venues for referential integrity.
+    columns:
+      - name: game_id
+        description: Unique MLB game identifier. Foreign key to stg_games.
+        tests:
+          - unique
+          - not_null
+
+      - name: game_date
+        description: Game date with no time component.
+        tests:
+          - not_null
+
+      - name: game_started_at
+        description: Game start datetime in UTC.
+        tests:
+          - not_null
+
+      - name: season
+        description: MLB season year.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [2022, 2023, 2024]
+
+      - name: game_location
+        description: >
+          Categorical indicator of whether the Rays were home or away.
+          Values are 'home' or 'away'. Designed for BI tool consumption
+          — slicers, filters, and labels render the value directly.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['home', 'away']
+
+      - name: is_home_game
+        description: >
+          Boolean flag indicating whether the Rays were the home team.
+          1 = home, 0 = away. Designed for analytical convenience —
+          SUM(is_home_game) returns home game count directly.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: opponent_team_id
+        description: MLB team ID of the Rays opponent. Foreign key to dim_teams.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_teams')
+              field: team_id
+
+      - name: opponent_team_name
+        description: Full name of the Rays opponent.
+        tests:
+          - not_null
+
+      - name: venue_id
+        description: MLB venue identifier. Foreign key to dim_venues.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_venues')
+              field: venue_id
+
+      - name: venue_name
+        description: Name of the ballpark.
+        tests:
+          - not_null
+
+      - name: rays_runs_scored
+        description: Runs scored by the Rays in this game.
+        tests:
+          - not_null
+
+      - name: rays_runs_allowed
+        description: Runs allowed by the Rays in this game.
+        tests:
+          - not_null
+
+      - name: rays_win
+        description: >
+          Win indicator from the Rays perspective. 1 = Rays won, 0 = Rays lost.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: game_status
+        description: Final game status from MLB Stats API.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Final', 'Completed Early']
