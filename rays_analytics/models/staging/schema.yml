@@ -1,0 +1,80 @@
+version: 2
+
+models:
+  - name: stg_games
+    description: >
+      Cleaned and typed game schedule data for Tampa Bay Rays regular season games.
+      One row per game. Source is the MLB Stats API via raw.games.
+      Renames columns to project conventions and casts game_date from VARCHAR to TIMESTAMP.
+    columns:
+      - name: game_id
+        description: Unique MLB game identifier. Natural key from MLB Stats API (gamePk).
+        tests:
+          - unique
+          - not_null
+
+      - name: game_date
+        description: Game date with no time component. Cast from game_started_at.
+        tests:
+          - not_null
+
+      - name: game_started_at
+        description: Game start datetime in UTC. Cast from VARCHAR ISO 8601 timestamp.
+        tests:
+          - not_null
+
+      - name: season
+        description: MLB season year.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [2022, 2023, 2024]
+
+      - name: home_team_id
+        description: MLB team ID for the home team.
+        tests:
+          - not_null
+
+      - name: home_team_name
+        description: Full name of the home team.
+        tests:
+          - not_null
+
+      - name: away_team_id
+        description: MLB team ID for the away team.
+        tests:
+          - not_null
+
+      - name: away_team_name
+        description: Full name of the away team.
+        tests:
+          - not_null
+
+      - name: home_score
+        description: Final score for the home team.
+        tests:
+          - not_null
+
+      - name: away_score
+        description: Final score for the away team.
+        tests:
+          - not_null
+
+      - name: game_status
+        description: Final game status from MLB Stats API.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Final', 'Completed Early']
+
+      - name: venue_id
+        description: MLB venue identifier.
+        tests:
+          - not_null
+
+      - name: venue_name
+        description: Name of the ballpark.
+        tests:
+          - not_null
