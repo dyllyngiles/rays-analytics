@@ -1,9 +1,10 @@
 import duckdb
 import requests
+import os
 
 # Connect to DuckDB
-con = duckdb.connect('/Users/dyllyngiles/projects/rays-analytics/dev.duckdb')
-con.execute("CREATE SCHEMA IF NOT EXISTS raw")
+db_path = os.getenv('DUCKDB_PATH', 'dev.duckdb')
+con = duckdb.connect(db_path)
 
 # Tampa Bay Rays team ID in the MLB Stats API
 RAYS_TEAM_ID = 139

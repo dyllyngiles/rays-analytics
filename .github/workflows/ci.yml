@@ -1,0 +1,60 @@
+name: dbt CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  dbt-build:
+    name: Load data and run dbt build
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the code on this PR branch
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Install Python using UV
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Create virtual environment and install dependencies
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install dbt-duckdb requests
+        working-directory: rays_analytics
+
+      # 4. Generate profiles.yml in the default ~/.dbt/ location
+      #    CI has no ~/.dbt/ directory — we create it and write the file
+      #    The DuckDB path points to where load_mlb_data.py will create the file
+      - name: Generate profiles.yml
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << 'EOF'
+          rays_analytics:
+            outputs:
+              dev:
+                type: duckdb
+                path: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
+                threads: 1
+            target: dev
+          EOF
+
+      # 5. Run the loader script to create and populate dev.duckdb
+      #    This recreates the raw.games table that dbt models depend on
+      - name: Load MLB data into DuckDB
+        run: |
+          uv run python load_mlb_data.py
+        env:
+          DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
+
+      # 6. Run dbt build — compiles models, runs them, and executes all tests
+      - name: Run dbt build
+        run: |
+          source .venv/bin/activate
+          dbt build
+        working-directory: rays_analytics
