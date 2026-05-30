@@ -1,0 +1,64 @@
+name: dbt CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  dbt-build:
+    name: Load data and run dbt build
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the code on this PR branch
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # 2. Install UV — pinned to exact version for supply chain security
+      #    Hash corresponds to v8.1.0 of setup-uv
+      - name: Install UV
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+
+      # 3. Create virtual environment at repo root and install dependencies
+      #    No working-directory here — venv must live at repo root to match
+      #    local setup and be accessible to both the loader and dbt
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install dbt-duckdb requests
+
+      # 4. Generate profiles.yml in the default ~/.dbt/ location
+      #    CI has no ~/.dbt/ directory — we create it and write the file
+      - name: Generate profiles.yml
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << 'PROFILE'
+          rays_analytics:
+            outputs:
+              dev:
+                type: duckdb
+                path: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
+                threads: 1
+            target: dev
+          PROFILE
+
+      # 5. Activate repo root venv and run the loader script
+      #    Creates and populates dev.duckdb that dbt models depend on
+      - name: Load MLB data into DuckDB
+        run: |
+          source .venv/bin/activate
+          python load_mlb_data.py
+        env:
+          DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
+
+      # 6. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then run dbt build — compiles models, materializes them, runs all tests
+      - name: Run dbt build
+        run: |
+          source ../.venv/bin/activate
+          dbt build
+        working-directory: rays_analytics
