@@ -13,12 +13,14 @@ jobs:
     steps:
       # 1. Check out the code on this PR branch
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      # 2. Install Python using UV
+      # 2. Install UV — pinned to exact version for supply chain security
+      #    Hash corresponds to v8.1.0 of setup-uv
       - name: Install UV
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
+          version: "0.11.16"  # Match local UV version exactly
           python-version: "3.12"
 
       # 3. Create virtual environment and install dependencies
@@ -34,7 +36,7 @@ jobs:
       - name: Generate profiles.yml
         run: |
           mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << 'EOF'
+          cat > ~/.dbt/profiles.yml << 'PROFILE'
           rays_analytics:
             outputs:
               dev:
@@ -42,7 +44,7 @@ jobs:
                 path: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
                 threads: 1
             target: dev
-          EOF
+          PROFILE
 
       # 5. Run the loader script to create and populate dev.duckdb
       #    This recreates the raw.games table that dbt models depend on
