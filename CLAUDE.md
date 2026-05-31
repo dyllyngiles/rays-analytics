@@ -241,11 +241,11 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - `load_mlb_data.py` updated — relative DuckDB path via `os.getenv`, connection scoping, error handling, timeout ✅
 - `pyproject.toml` and `uv.lock` added — CI uses `uv sync --locked` ✅
 - dbt docs published to GitHub Pages ✅
+- Pin `actions/checkout` to v6.0.2 hash ✅
+- Swap `uv sync --frozen` → `uv sync --locked` in `ci.yml` ✅
+- Add `uv audit` step to `ci.yml` ✅
 
 **Remaining:**
-- Pin `actions/checkout` to v6.0.2 hash — currently using floating `@v6` tag, inconsistent with supply chain security approach
-- Swap `uv sync --frozen` → `uv sync --locked` in `ci.yml`
-- Add `uv audit` step to `ci.yml`
 - Set branch protection rules — PRs must pass CI before merging
 - Write README — project overview, data source, modeling decisions, CI explanation
 
@@ -352,17 +352,13 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 *Update this at the end of every working session — not just at phase boundaries. Paste the full instructions document plus this section at the start of a new chat to resume without a verbal debrief.*
 
 **Last session:**
-- Rewrote project instructions — restructured into Part 1/Part 2, factual corrections applied, bloat trimmed
+- Hardened CI: pinned `actions/checkout` to v6.0.2 hash, swapped `--frozen` → `--locked`, added `uv audit` step — merged via PR #6
 
-**Active branch:** `feature/add-pyproject-and-lockfile` (PR open, CI passing — confirm before merging)
+**Active branch:** `main` (all changes merged, branch clean)
 
 **Next actions:**
-1. Open a new branch for the remaining Phase 2 CI fixes
-2. Pin `actions/checkout` to v6.0.2 hash in `ci.yml`
-3. Swap `uv sync --frozen` → `uv sync --locked` in `ci.yml`
-4. Add `uv audit` step to `ci.yml`
-5. Set branch protection rules in GitHub
-6. Write README
+1. Set branch protection rules in GitHub — PRs must pass CI before merging
+2. Write README — project overview, data source, modeling decisions, CI explanation
 
 **Decisions made this session not captured elsewhere:**
 - `uv audit` is the dependency scanning approach — built into uv, no extra install, replaces the pip-audit/Dependabot option that was previously listed
