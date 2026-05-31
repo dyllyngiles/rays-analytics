@@ -27,9 +27,7 @@ jobs:
       #    No working-directory here — venv must live at repo root to match
       #    local setup and be accessible to both the loader and dbt
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install dbt-duckdb requests
+        run: uv sync --frozen
 
       # 4. Generate profiles.yml in the default ~/.dbt/ location
       #    CI has no ~/.dbt/ directory — we create it and write the file
