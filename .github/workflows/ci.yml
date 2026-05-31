@@ -13,7 +13,7 @@ jobs:
     steps:
       # 1. Check out the code on this PR branch
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # 2. Install UV — pinned to exact version for supply chain security
       #    Hash corresponds to v8.1.0 of setup-uv
@@ -27,9 +27,13 @@ jobs:
       #    No working-directory here — venv must live at repo root to match
       #    local setup and be accessible to both the loader and dbt
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
 
-      # 4. Generate profiles.yml in the default ~/.dbt/ location
+      # 4. Audit dependencies against OSV vulnerability database
+      - name: Audit dependencies
+        run: uv audit
+
+      # 6. Generate profiles.yml in the default ~/.dbt/ location
       #    CI has no ~/.dbt/ directory — we create it and write the file
       - name: Generate profiles.yml
         run: |
@@ -44,7 +48,7 @@ jobs:
             target: dev
           PROFILE
 
-      # 5. Activate repo root venv and run the loader script
+      # 7. Activate repo root venv and run the loader script
       #    Creates and populates dev.duckdb that dbt models depend on
       - name: Load MLB data into DuckDB
         run: |
@@ -53,7 +57,7 @@ jobs:
         env:
           DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
 
-      # 6. Activate venv from one level up (../) since we're inside rays_analytics/
+      # 8. Activate venv from one level up (../) since we're inside rays_analytics/
       #    then run dbt build — compiles models, materializes them, runs all tests
       - name: Run dbt build
         run: |
