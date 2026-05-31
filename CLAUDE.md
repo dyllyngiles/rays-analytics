@@ -361,5 +361,5 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 2. Write README — project overview, data source, modeling decisions, CI explanation
 
 **Decisions made this session not captured elsewhere:**
-- `uv audit` is the dependency scanning approach — built into uv, no extra install, replaces the pip-audit/Dependabot option that was previously listed
+- `uv audit` is the dependency scanning approach — built into uv, no extra install required
 - Use Claude Code for implementation work; use this chat interface for research, planning, and documentation
