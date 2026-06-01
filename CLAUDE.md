@@ -24,7 +24,7 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 ### Local Environment
 
 - Homebrew (package manager)
-- UV 0.11.16 (Python package and environment manager — replaces both pip and pyenv)
+- UV 0.11.17 (Python package and environment manager — replaces both pip and pyenv)
 - Python 3.12.13 managed by UV
 - VS Code with extensions: dbt Power User, Python, GitLens, Claude Code
 - GitHub account connected via SSH key (Ed25519)
@@ -209,7 +209,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required. Checks all locked dependencies against the OSV vulnerability database and returns a non-zero exit code on findings, which fails the CI step.
 
-**UV version:** Pinned to `0.11.16` to match local version exactly.
+**UV version:** Pinned to `0.11.17` to match local version exactly.
 
 **Venv location:** Created at repo root (no `working-directory` on the install step) to match local layout and be accessible to both the loader and dbt.
 
