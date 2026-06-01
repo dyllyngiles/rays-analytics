@@ -144,6 +144,7 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
   load_mlb_data.py                  ← MLB Stats API loader
   dev.duckdb                        ← local DuckDB file (gitignored)
   publish_docs.sh                   ← publishes dbt docs to GitHub Pages
+  README.md                         ← project overview and local setup
   CLAUDE.md                         ← Claude Code context
   .github/
     workflows/
@@ -222,6 +223,8 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **Phase 3 CI transition:** When porting to Snowflake, the dynamic profiles.yml generation step changes significantly. Snowflake password authentication is deprecated for new accounts (see Phase 3 notes). The dbt service account must use key-pair authentication. The private key is stored as a GitHub Secret, written to a temp file during the CI run, and referenced by path in the generated profile.
 
+**Branch protection:** A GitHub ruleset is active on `main` — requires PR, requires CI to pass, blocks force pushes, restricts branch deletion.
+
 ---
 
 ### Learning Roadmap
@@ -232,7 +235,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 ---
 
-#### Phase 2 — Version Control 🔄 IN PROGRESS
+#### Phase 2 — Version Control ✅ COMPLETE
 
 **Completed:**
 - `.gitignore`, `profiles.yml` kept outside repo, project pushed to public GitHub
@@ -244,10 +247,9 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - Pin `actions/checkout` to v6.0.2 hash ✅
 - Swap `uv sync --frozen` → `uv sync --locked` in `ci.yml` ✅
 - Add `uv audit` step to `ci.yml` ✅
-
-**Remaining:**
-- Set branch protection rules — PRs must pass CI before merging
-- Write README — project overview, data source, modeling decisions, CI explanation
+- Branch protection ruleset on `main` — require PR, require CI, block force pushes, restrict deletion ✅
+- README added at repo root ✅
+- Removed default dbt README from `rays_analytics/` ✅
 
 **Skills locked in:** Git-based workflow, CI pipeline authoring, PR-driven development, branch protection, secrets management discipline, CI debugging from logs, dependency auditing.
 
@@ -352,14 +354,19 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 *Update this at the end of every working session — not just at phase boundaries. Paste the full instructions document plus this section at the start of a new chat to resume without a verbal debrief.*
 
 **Last session:**
-- Hardened CI: pinned `actions/checkout` to v6.0.2 hash, swapped `--frozen` → `--locked`, added `uv audit` step — merged via PR #6
+- Branch protection ruleset created on `main` — require PR, require CI pass, block force pushes, restrict deletion
+- README written and merged via PR
+- Removed default dbt README from `rays_analytics/`
+- Phase 2 complete
 
 **Active branch:** `main` (all changes merged, branch clean)
 
 **Next actions:**
-1. Set branch protection rules in GitHub — PRs must pass CI before merging
-2. Write README — project overview, data source, modeling decisions, CI explanation
+1. Create Snowflake trial account
+2. Set up Resource Monitor immediately — before doing anything else in Snowflake
+3. Read the Phase 3 authentication note carefully before creating any users
 
 **Decisions made this session not captured elsewhere:**
+- GitHub Rulesets (not classic Branch Protection Rules) is the current standard — used for branch protection
 - `uv audit` is the dependency scanning approach — built into uv, no extra install required
 - Use Claude Code for implementation work; use this chat interface for research, planning, and documentation
