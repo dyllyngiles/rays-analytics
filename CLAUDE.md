@@ -24,7 +24,7 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 ### Local Environment
 
 - Homebrew (package manager)
-- UV 0.11.17 (Python package and environment manager — replaces both pip and pyenv)
+- UV 0.11.16 (Python package and environment manager — replaces both pip and pyenv)
 - Python 3.12.13 managed by UV
 - VS Code with extensions: dbt Power User, Python, GitLens, Claude Code
 - GitHub account connected via SSH key (Ed25519)
@@ -96,13 +96,13 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
 
-**dbt Core vs dbt Fusion:** dbt Labs launched dbt Fusion in May 2025 — a Rust-based rewrite of dbt Core, GA for Snowflake on the dbt platform. It is licensed under ELv2 (non-compete clause, not Apache 2.0). dbt Core remains the right choice for this self-hosted stack: open source, fully supported, no vendor lock-in. Fusion is primarily relevant to dbt platform (Cloud) users. Worth monitoring as it matures.
+**dbt Core vs dbt Fusion vs dbt Core v2.0:** This space moved significantly at Snowflake Summit in June 2026. dbt Labs open-sourced the Fusion runtime as dbt Core v2.0 under Apache 2.0 — the previous ELv2 license concern no longer applies to the core runtime. However, v2.0 is currently in alpha and dbt Core v1.11.x remains the right choice for this stack. The Fusion distribution (`pip install dbt`) extends the open runtime with proprietary capabilities and is what dbt Labs recommends for most users long-term. The two-engine era is ending — Core and Fusion now share a foundation. Worth monitoring; revisit at Phase 8.
 
 **Snowflake-native dbt:** GA November 2025. No additional licensing cost — pay only warehouse credits. Worth exploring alongside the local dbt workflow in Phase 3.
 
 **Snowflake Semantic Views:** Standard SQL querying GA March 2026. Zero extra cost, zero infrastructure overhead. Snowflake-only, but this stack is Snowflake-only in production.
 
-**dbt/Fivetran merger:** Announced October 2025, expected to close mid–late 2026. dbt Core remains Apache 2.0 open source. No impact on this stack.
+**dbt/Fivetran merger:** Completed June 1, 2026. George Fraser (Fivetran) is CEO, Tristan Handy (dbt Labs) is President. dbt Core remains Apache 2.0 open source. No impact on this stack. Community sentiment is mixed — the Apache 2.0 floor protects against worst-case scenarios, but long-term investment balance between Core and the commercial platform bears watching.
 
 ---
 
@@ -113,7 +113,7 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 | Airbyte | Docker-heavy; free tier uncertain; dlt teaches more |
 | Dagster Cloud | Free credits removed May 2026; per-asset billing from zero |
 | dbt Cloud | $100/seat/month for Semantic Layer API access |
-| dbt Fusion | ELv2 license (not Apache 2.0); primarily for dbt platform users |
+| dbt Fusion (distribution) | Proprietary extensions above the Apache 2.0 runtime; v2.0 alpha not production-ready; Core v1.11.x is current and stable |
 | Fivetran | Pricing restructured March 2025; per-connector costs increased 50–60% |
 | Jupyter | Replaced by Marimo — git-friendly, no hidden state, saves as Python files |
 | Docker | RAM constraint; not needed for this stack |
@@ -209,7 +209,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required. Checks all locked dependencies against the OSV vulnerability database and returns a non-zero exit code on findings, which fails the CI step.
 
-**UV version:** Pinned to `0.11.17` to match local version exactly.
+**UV version:** Pinned to `0.11.16` to match local version exactly.
 
 **Venv location:** Created at repo root (no `working-directory` on the install step) to match local layout and be accessible to both the loader and dbt.
 
@@ -264,7 +264,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - Set up Resource Monitor immediately — cap $20/month, alert at 75%
 - Configure warehouse with 60-second auto-suspend and auto-resume
 - Set up key-pair authentication for dbt service account (see authentication note below)
-- Install dbt-snowflake v1.11.x (`uv add dbt-snowflake`)
+- Install dbt-snowflake v1.11.4 (`uv add dbt-snowflake==1.11.4`)
 - Update `profiles.yml` locally to point at Snowflake with key-pair auth
 - Port models to Snowflake; create DEV and PROD schemas
 - Fix `relationships` test deprecation warning (nest arguments under `arguments` property)
@@ -274,6 +274,8 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **⚠ Authentication note — read before creating your Snowflake account:**
 Snowflake is deprecating single-factor password authentication in a phased rollout through 2026. For accounts created now: newly created human users must use MFA (enforced May–July 2026); service users must use key-pair, OAuth, or PAT — password auth is blocked (enforced August–October 2026). Practically: do not configure `password:` in `profiles.yml` or CI for the dbt service account. Set up key-pair authentication from day one. This requires generating an RSA key pair, registering the public key with the Snowflake user, and storing the private key path (locally) or private key content (as a GitHub Secret in CI).
+
+When creating the dbt service user, explicitly set `TYPE = SERVICE` in the CREATE USER statement. A user with `TYPE = NULL` is treated as HUMAN and subject to different (stricter) authentication enforcement. Setting TYPE correctly from day one avoids surprises as Snowflake's rollout completes.
 
 **⚠ dbt-snowflake version note:**
 Snowflake increased default column size for string/binary types in May 2026. dbt-snowflake versions below v1.10.6 fail to build incremental models using `on_schema_change: sync_all_columns` when string columns don't specify a width. Current compatible version is 1.11.4. Install current, not minimum.
@@ -344,6 +346,7 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 **Key notes:**
 - Slim CI: `dbt build --select state:modified+` on PRs only — requires a manifest artifact from the last prod run
 - Create a dedicated CI Snowflake warehouse (X-Small, 60-second auto-suspend) for isolated cost tracking separate from dev/prod
+- Revisit dbt State (announced June 2026) as a potential platform-managed alternative to manual manifest-based slim CI — compare approaches before implementing
 
 **Skills locked in:** Slim CI, multi-environment warehouse management, metric validation in CI, portfolio documentation.
 
@@ -354,19 +357,21 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 *Update this at the end of every working session — not just at phase boundaries. Paste the full instructions document plus this section at the start of a new chat to resume without a verbal debrief.*
 
 **Last session:**
-- Branch protection ruleset created on `main` — require PR, require CI pass, block force pushes, restrict deletion
-- README written and merged via PR
-- Removed default dbt README from `rays_analytics/`
-- Phase 2 complete
+- Reviewed Phase 3 plan against current state of the ecosystem (June 2026)
+- dbt Core v2.0 alpha announced at Snowflake Summit June 1–4, 2026 — Fusion runtime open-sourced under Apache 2.0; ELv2 license concern resolved for the runtime
+- Fivetran + dbt Labs merger completed June 1, 2026
+- Updated project instructions to reflect these changes
+- Phase 2 complete; Phase 3 not yet started
 
 **Active branch:** `main` (all changes merged, branch clean)
 
 **Next actions:**
 1. Create Snowflake trial account
 2. Set up Resource Monitor immediately — before doing anything else in Snowflake
-3. Read the Phase 3 authentication note carefully before creating any users
+3. Read the Phase 3 authentication note carefully before creating any users — remember to set `TYPE = SERVICE` on the dbt service user
 
 **Decisions made this session not captured elsewhere:**
 - GitHub Rulesets (not classic Branch Protection Rules) is the current standard — used for branch protection
 - `uv audit` is the dependency scanning approach — built into uv, no extra install required
 - Use Claude Code for implementation work; use this chat interface for research, planning, and documentation
+- dbt-sqlserver has no Fusion adapter support and no announced roadmap for it — relevant context for workplace dbt usage, not this project
