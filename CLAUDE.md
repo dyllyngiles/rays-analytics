@@ -10,7 +10,7 @@
 
 ### About Me
 
-My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analytics engineer with existing dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
+My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analyticd with some dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
 
 ---
 
@@ -51,7 +51,7 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 
 **Docker is intentionally avoided.** 16GB RAM constraint, and the entire stack runs as Python or Node processes.
 
-**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed to the repo. Local config points to `dev.duckdb` at repo root.
+**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed to the repo. Local config points to Snowflake DEV schema. DuckDB target retained as `dev_duck` for reference.
 
 **DuckDB path is always a relative path** (`dev.duckdb`) from repo root, never hardcoded absolute. The `DUCKDB_PATH` environment variable overrides it in CI.
 
@@ -134,6 +134,81 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 
 ---
 
+### Snowflake Account
+
+- **Edition:** Standard, AWS us-east-2
+- **Account identifier:** stored locally in `~/.dbt/profiles.yml` — not documented here
+- **Warehouse:** COMPUTE_WH (X-Small, 60-sec auto-suspend, auto-resume on)
+- **Resource monitor:** MONTHLY_SPEND_CAP — 15 credits/month, notify at 75%, suspend at 100%
+- **Database:** RAYS_ANALYTICS
+- **Schemas:** RAW, DEV, PROD
+- **Service user:** DBT_SERVICE_USER — TYPE = SERVICE, SYSADMIN role, key-pair auth
+- **Key location:** `~/.ssh/dbt_service_user_rsa_key_p8.pem` (PKCS#8 format)
+
+---
+
+### Snowflake Key-Pair Auth Notes
+
+Key-pair auth requires PKCS#8 format — the standard `openssl genrsa` output is PKCS#1 and will fail with a JWT error. Generate keys with:
+
+```bash
+openssl genrsa -out dbt_service_user_rsa_key.pem 2048
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in dbt_service_user_rsa_key.pem \
+  -out dbt_service_user_rsa_key_p8.pem
+openssl rsa -in dbt_service_user_rsa_key.pem -pubout \
+  -out dbt_service_user_rsa_key.pub
+```
+
+Register the public key in Snowflake (base64 block only, no header/footer):
+
+```bash
+grep -v "BEGIN\|END" ~/.ssh/dbt_service_user_rsa_key.pub | tr -d '\n'
+```
+
+```sql
+ALTER USER DBT_SERVICE_USER SET RSA_PUBLIC_KEY='<paste_base64_here>';
+```
+
+**Account identifier gotcha:** The identifier shown in the browser URL is not what dbt needs. Use `SELECT SYSTEM$ALLOWLIST()` and look for the `SNOWFLAKE_DEPLOYMENT` entry to find the correct regional format. The regionless format (`org-account`) did not work; the regional format (`locator.region.aws`) did.
+
+---
+
+### Snowsight Navigation (as of June 2026)
+
+Snowsight was significantly reorganized. Key locations:
+
+- **SQL editor (Workspaces):** Projects — Worksheets renamed to Workspaces as of April 2026
+- **Warehouses:** Admin → Compute
+- **Resource Monitors:** Admin → Cost Management
+- **Legacy Worksheets removed:** June 22, 2026
+
+---
+
+### Current `profiles.yml` structure
+
+```yaml
+rays_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: <account_identifier>         # regional format: locator.region.aws
+      user: DBT_SERVICE_USER
+      private_key_path: ~/.ssh/dbt_service_user_rsa_key_p8.pem
+      role: SYSADMIN
+      database: RAYS_ANALYTICS
+      warehouse: COMPUTE_WH
+      schema: DEV
+      threads: 4
+    dev_duck:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'dev.duckdb') }}"
+      threads: 4
+```
+
+---
+
 ### Project Structure
 
 ```
@@ -168,13 +243,13 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 ### Data Model
 
 - **Source:** MLB Stats API (no auth required)
-- **Raw table:** `raw.games` in DuckDB
+- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake (not yet loaded — deferred to Phase 4)
 - **Rays team ID:** 139
 - **Seasons loaded:** 2022, 2023, 2024 (486 games)
 - **Star schema:** stg_games → dim_teams, dim_venues, fct_games
-- **44 tests passing** — not_null, unique, accepted_values, relationships
+- **44 tests** — not_null, unique, accepted_values, relationships
 
-**Known deprecation warning:** CI logs show `MissingArgumentsPropertyInGenericTestDeprecation` on the `relationships` test in `models/marts/schema.yml`. Arguments to generic tests should be nested under an `arguments` property. Low priority — address in Phase 3 when porting models to Snowflake.
+**Known deprecation warning:** `MissingArgumentsPropertyInGenericTestDeprecation` on the `relationships` test in `models/marts/schema.yml`. Arguments to generic tests should be nested under an `arguments` property. To be fixed as remaining Phase 3 work.
 
 ---
 
@@ -184,8 +259,8 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 - Activate venv and navigate at session start:
   ```bash
   cd ~/projects/rays-analytics
-  source .venv/bin/activate    # activates from repo root
-  cd rays_analytics             # then move into dbt project for dbt commands
+  source .venv/bin/activate
+  cd rays_analytics
   ```
 - Feature branch for every change, no direct commits to main
 - After `dbt run` — view compiled SQL in `target/compiled/` or use dbt Power User preview panel
@@ -201,29 +276,17 @@ My name is Dyllyn Giles. I'm based in Versailles, Kentucky. I work as an analyti
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to main.
 
-**Actions pinning:** All actions are pinned to exact commit hashes, not floating version tags. The March 2025 tj-actions/changed-files compromise — which leaked secrets from thousands of repositories via a hijacked tag — is the canonical reason why. A floating tag like `@v6` can be silently repointed to malicious code. Current pinned hashes:
+**Actions pinning:** All actions are pinned to exact commit hashes, not floating version tags. The March 2025 tj-actions/changed-files compromise — which leaked secrets from thousands of repositories via a hijacked tag — is the canonical reason why. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
 - `astral-sh/setup-uv` v8.1.0 → `08807647e7069bb48b6ef5acd8ec9567f424441b`
 
-**Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted. See Key Environment Decisions for the `--locked` vs `--frozen` distinction.
+**Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted.
 
-**Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required. Checks all locked dependencies against the OSV vulnerability database and returns a non-zero exit code on findings, which fails the CI step.
+**Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required.
 
 **UV version:** Pinned to `0.11.16` to match local version exactly.
 
-**Venv location:** Created at repo root (no `working-directory` on the install step) to match local layout and be accessible to both the loader and dbt.
-
-**Loader step:** Activates `.venv/bin/activate` from repo root, then runs `load_mlb_data.py`. Runs at repo root by default, which is where the script lives.
-
-**dbt build step:** Uses `../.venv/bin/activate` (one level up from `rays_analytics/`) to reach the repo root venv. `working-directory: rays_analytics`.
-
-**DuckDB path in CI:** `/home/runner/work/rays-analytics/rays-analytics/dev.duckdb` — set via `DUCKDB_PATH` env var on the loader step.
-
-**Profiles.yml in CI:** Generated dynamically — CI has no `~/.dbt/` directory. Step creates it with `mkdir -p ~/.dbt` and writes the file.
-
-**Phase 3 CI transition:** When porting to Snowflake, the dynamic profiles.yml generation step changes significantly. Snowflake password authentication is deprecated for new accounts (see Phase 3 notes). The dbt service account must use key-pair authentication. The private key is stored as a GitHub Secret, written to a temp file during the CI run, and referenced by path in the generated profile.
-
-**Branch protection:** A GitHub ruleset is active on `main` — requires PR, requires CI to pass, blocks force pushes, restricts branch deletion.
+**Phase 3 CI transition:** CI currently runs against DuckDB. Needs to be updated to generate a Snowflake `profiles.yml` dynamically using the service user private key stored as a GitHub Secret. The private key content (PKCS#8 format) goes in as a secret, gets written to a temp file during the CI run, and is referenced by path in the generated profile.
 
 ---
 
@@ -237,50 +300,34 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 #### Phase 2 — Version Control ✅ COMPLETE
 
-**Completed:**
-- `.gitignore`, `profiles.yml` kept outside repo, project pushed to public GitHub
-- Feature branch workflow established
-- CI workflow (`ci.yml`) fully passing — 48/48 tests green ✅
-- `load_mlb_data.py` updated — relative DuckDB path via `os.getenv`, connection scoping, error handling, timeout ✅
-- `pyproject.toml` and `uv.lock` added — CI uses `uv sync --locked` ✅
-- dbt docs published to GitHub Pages ✅
-- Pin `actions/checkout` to v6.0.2 hash ✅
-- Swap `uv sync --frozen` → `uv sync --locked` in `ci.yml` ✅
-- Add `uv audit` step to `ci.yml` ✅
-- Branch protection ruleset on `main` — require PR, require CI, block force pushes, restrict deletion ✅
-- README added at repo root ✅
-- Removed default dbt README from `rays_analytics/` ✅
-
 **Skills locked in:** Git-based workflow, CI pipeline authoring, PR-driven development, branch protection, secrets management discipline, CI debugging from logs, dependency auditing.
 
 ---
 
-#### Phase 3 — Real Warehouse (~$30–40/month, ~2 weeks)
+#### Phase 3 — Real Warehouse 🔄 IN PROGRESS
 
 **Goal:** Swap the dbt adapter from DuckDB to Snowflake, port all models, configure dev/prod environments, and establish cost controls.
 
-**Key tasks:**
-- Create Snowflake trial account; understand object hierarchy (account → database → schema → table)
-- Set up Resource Monitor immediately — cap $20/month, alert at 75%
-- Configure warehouse with 60-second auto-suspend and auto-resume
-- Set up key-pair authentication for dbt service account (see authentication note below)
-- Install dbt-snowflake v1.11.4 (`uv add dbt-snowflake==1.11.4`)
-- Update `profiles.yml` locally to point at Snowflake with key-pair auth
-- Port models to Snowflake; create DEV and PROD schemas
-- Fix `relationships` test deprecation warning (nest arguments under `arguments` property)
+**Completed:**
+- Snowflake trial account created — Standard edition, AWS us-east-2 ✅
+- Resource Monitor configured — MONTHLY_SPEND_CAP, 15 credits/month, suspend at 100% ✅
+- Warehouse configured — COMPUTE_WH, X-Small, 60-sec auto-suspend ✅
+- Database and schemas created — RAYS_ANALYTICS with RAW, DEV, PROD ✅
+- Service user created — DBT_SERVICE_USER, TYPE = SERVICE, SYSADMIN role ✅
+- Key-pair authentication configured — PKCS#8 format, public key registered ✅
+- dbt-snowflake v1.11.4 installed ✅
+- profiles.yml updated — Snowflake as default dev target, DuckDB retained as dev_duck ✅
+- dbt debug passing ✅
+
+**Remaining:**
+- Fix `relationships` test deprecation warning in `models/marts/schema.yml`
 - Update GitHub Actions CI — swap DuckDB profile generation for Snowflake key-pair profile
-- Open Query Profile on a compiled model — build the habit of understanding what Snowflake executes
-- Explore dbt Projects on Snowflake Workspaces; compare to local dbt workflow
+- Store private key as GitHub Secret
+- Open Query Profile on a compiled model
+- Explore dbt Projects on Snowflake Workspaces
+- Data loading deferred to Phase 4 — `dbt build` will not fully pass until RAW.GAMES is populated
 
-**⚠ Authentication note — read before creating your Snowflake account:**
-Snowflake is deprecating single-factor password authentication in a phased rollout through 2026. For accounts created now: newly created human users must use MFA (enforced May–July 2026); service users must use key-pair, OAuth, or PAT — password auth is blocked (enforced August–October 2026). Practically: do not configure `password:` in `profiles.yml` or CI for the dbt service account. Set up key-pair authentication from day one. This requires generating an RSA key pair, registering the public key with the Snowflake user, and storing the private key path (locally) or private key content (as a GitHub Secret in CI).
-
-When creating the dbt service user, explicitly set `TYPE = SERVICE` in the CREATE USER statement. A user with `TYPE = NULL` is treated as HUMAN and subject to different (stricter) authentication enforcement. Setting TYPE correctly from day one avoids surprises as Snowflake's rollout completes.
-
-**⚠ dbt-snowflake version note:**
-Snowflake increased default column size for string/binary types in May 2026. dbt-snowflake versions below v1.10.6 fail to build incremental models using `on_schema_change: sync_all_columns` when string columns don't specify a width. Current compatible version is 1.11.4. Install current, not minimum.
-
-**Skills locked in:** Snowflake architecture, cost monitoring, dev/prod separation, query profiling, resource management, key-pair authentication, Snowflake-native dbt.
+**Skills locked in so far:** Snowflake architecture, cost monitoring, key-pair authentication, account identifier formats, dbt-snowflake adapter setup.
 
 ---
 
@@ -294,6 +341,7 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 - Incremental loading requires a cursor column — understand dlt state management
 - Update season list to include 2025 and 2026; update `accepted_values` tests accordingly
 - Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond
+- Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase
 
 **Skills locked in:** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo.
 
@@ -304,7 +352,7 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 **Goal:** Wrap dbt and dlt in Dagster assets or Prefect flows; define explicit dependency between loader and build; schedule the full pipeline; wire up Elementary and Slack alerts; deliberately break something.
 
 **Key notes:**
-- Dagster Cloud removed free credits May 1, 2026 — use Dagster OSS (local Python process) or Prefect Cloud free Hobby tier (2 users, 5 workflows, 500 serverless compute minutes, no credit card required)
+- Dagster Cloud removed free credits May 1, 2026 — use Dagster OSS or Prefect Cloud free Hobby tier
 - Elementary: run `edr report` after dbt builds; configure Slack alerts for failures
 - Add dbt source freshness checks — stale dlt syncs surface as pipeline failures
 
@@ -317,9 +365,9 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 **Goal:** Define MetricFlow semantic models and metrics; create Snowflake Semantic Views on top of the mart layer; expose metrics via Cube; build and deploy an Evidence report.
 
 **Key notes:**
-- MetricFlow YAML is the OSI v1.0 reference implementation — learning the spec now, not just the tool
-- Cube Cloud free tier is for dev/test only; Cube Core runs locally as a Node process: `npm install -g @cubejs-backend/cli`
-- Connect Evidence to Cube's API, not directly to Snowflake — this is the governed pattern
+- MetricFlow YAML is the OSI v1.0 reference implementation
+- Cube Cloud free tier is for dev/test only; Cube Core runs locally: `npm install -g @cubejs-backend/cli`
+- Connect Evidence to Cube's API, not directly to Snowflake
 - Deploy Evidence report to Vercel free tier or GitHub Pages
 
 **Skills locked in:** MetricFlow YAML, Snowflake Semantic Views, Cube as API-first semantic layer, BI consumption of governed metrics, full author-to-consume workflow.
@@ -332,8 +380,8 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 
 **Key notes:**
 - Set a $10/month spend cap in Anthropic account settings before writing any API calls
-- Compare Snowflake Cortex Analyst (warehouse-native, zero portability) vs Claude API over Cube (portable, framework-agnostic)
-- Cube has an MCP server — query the semantic layer directly from Claude Code terminal without writing Python
+- Compare Snowflake Cortex Analyst vs Claude API over Cube
+- Cube has an MCP server — query the semantic layer directly from Claude Code terminal
 
 **Skills locked in:** AI-over-data patterns, text-to-metric vs text-to-SQL, semantic layer as AI context, API spend management, MCP orchestration.
 
@@ -344,9 +392,9 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 **Goal:** Implement slim CI with state-based selection; add MetricFlow validation; write a comprehensive README; record a walkthrough of the full stack end-to-end.
 
 **Key notes:**
-- Slim CI: `dbt build --select state:modified+` on PRs only — requires a manifest artifact from the last prod run
-- Create a dedicated CI Snowflake warehouse (X-Small, 60-second auto-suspend) for isolated cost tracking separate from dev/prod
-- Revisit dbt State (announced June 2026) as a potential platform-managed alternative to manual manifest-based slim CI — compare approaches before implementing
+- Slim CI: `dbt build --select state:modified+` on PRs only
+- Create a dedicated CI Snowflake warehouse for isolated cost tracking
+- Revisit dbt State (announced June 2026) as a potential platform-managed alternative
 
 **Skills locked in:** Slim CI, multi-environment warehouse management, metric validation in CI, portfolio documentation.
 
@@ -354,24 +402,28 @@ Snowflake increased default column size for string/binary types in May 2026. dbt
 
 ### Session Handoff
 
-*Update this at the end of every working session — not just at phase boundaries. Paste the full instructions document plus this section at the start of a new chat to resume without a verbal debrief.*
+*Update this at the end of every working session.*
 
 **Last session:**
-- Reviewed Phase 3 plan against current state of the ecosystem (June 2026)
-- dbt Core v2.0 alpha announced at Snowflake Summit June 1–4, 2026 — Fusion runtime open-sourced under Apache 2.0; ELv2 license concern resolved for the runtime
-- Fivetran + dbt Labs merger completed June 1, 2026
-- Updated project instructions to reflect these changes
-- Phase 2 complete; Phase 3 not yet started
+- Created Snowflake trial account — Standard edition, AWS us-east-2
+- Configured Resource Monitor, warehouse, database, schemas
+- Created DBT_SERVICE_USER with TYPE = SERVICE and key-pair auth
+- Installed dbt-snowflake v1.11.4, updated profiles.yml
+- Worked through account identifier issues — URL slug differs from actual identifier; use `SELECT SYSTEM$ALLOWLIST()` to find the correct regional format
+- PKCS#8 key format required — standard `openssl genrsa` output (PKCS#1) fails with JWT error
+- `dbt debug` passing; `dbt build` fails only because RAW.GAMES does not exist yet — expected, data loading deferred to Phase 4
+- Snowsight UI reorganized — Worksheets is now Workspaces under Projects
 
-**Active branch:** `main` (all changes merged, branch clean)
+**Active branch:** `main` (no feature branch open)
 
 **Next actions:**
-1. Create Snowflake trial account
-2. Set up Resource Monitor immediately — before doing anything else in Snowflake
-3. Read the Phase 3 authentication note carefully before creating any users — remember to set `TYPE = SERVICE` on the dbt service user
+1. Open a feature branch
+2. Fix `relationships` deprecation warning in `models/marts/schema.yml`
+3. Update GitHub Actions CI — dynamic profiles.yml with key-pair auth, private key as GitHub Secret
+4. Commit updated CLAUDE.md
 
 **Decisions made this session not captured elsewhere:**
-- GitHub Rulesets (not classic Branch Protection Rules) is the current standard — used for branch protection
-- `uv audit` is the dependency scanning approach — built into uv, no extra install required
-- Use Claude Code for implementation work; use this chat interface for research, planning, and documentation
-- dbt-sqlserver has no Fusion adapter support and no announced roadmap for it — relevant context for workplace dbt usage, not this project
+- Snowflake CoCo (formerly Cortex Code) announced at Summit — Snowflake's AI coding agent, not relevant to this stack at this phase
+- AWS us-east-2 chosen — lowest on-demand credit cost, most common in job descriptions
+- Regionless account identifier format did not work with dbt; regional format required
+- Service user TYPE = SERVICE set correctly from day one per Snowflake auth deprecation rollout
