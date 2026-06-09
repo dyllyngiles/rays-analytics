@@ -91,8 +91,9 @@ models:
         tests:
           - not_null
           - relationships:
-              to: ref('dim_teams')
-              field: team_id
+              arguments:
+                to: ref('dim_teams')
+                field: team_id
 
       - name: opponent_team_name
         description: Full name of the Rays opponent.
@@ -104,8 +105,9 @@ models:
         tests:
           - not_null
           - relationships:
-              to: ref('dim_venues')
-              field: venue_id
+              arguments:
+                to: ref('dim_venues')
+                field: venue_id
 
       - name: venue_name
         description: Name of the ballpark.
