@@ -24,7 +24,7 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analyticd w
 ### Local Environment
 
 - Homebrew (package manager)
-- UV 0.11.16 (Python package and environment manager — replaces both pip and pyenv)
+- UV 0.11.17 (Python package and environment manager — replaces both pip and pyenv)
 - Python 3.12.13 managed by UV
 - VS Code with extensions: dbt Power User, Python, GitLens, Claude Code
 - GitHub account connected via SSH key (Ed25519)
@@ -284,7 +284,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required.
 
-**UV version:** Pinned to `0.11.16` to match local version exactly.
+**UV version:** Pinned to `0.11.17` to match local version exactly.
 
 **Phase 3 CI transition:** CI currently runs against DuckDB. Needs to be updated to generate a Snowflake `profiles.yml` dynamically using the service user private key stored as a GitHub Secret. The private key content (PKCS#8 format) goes in as a secret, gets written to a temp file during the CI run, and is referenced by path in the generated profile.
 
