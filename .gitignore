@@ -21,3 +21,6 @@ __pycache__/
 
 # OS
 .DS_Store
+# scratch / one-off exports — never committed
+/games_export.csv
+/scratch/
