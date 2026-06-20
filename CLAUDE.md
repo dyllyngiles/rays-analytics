@@ -10,7 +10,7 @@
 
 ### About Me
 
-My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analyticd with some dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
+My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics with some dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
 
 ---
 
@@ -76,7 +76,7 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analyticd w
 | AI development | Claude Pro + Claude Code + Anthropic API | Phase 7+ |
 
 **Snowflake-native additions (Phase 3+):**
-- dbt Projects on Snowflake (GA November 2025) — run dbt Core natively inside Snowflake Workspaces, no external infrastructure
+- dbt Projects on Snowflake (GA November 2025) — run dbt Core natively inside Snowflake, via a Git-connected Workspace + a deployed `DBT PROJECT` object. Explored in Phase 3 (currently unconfigured — requires a GitHub API integration and a Git-connected Workspace to populate). Deferred — will be weighed against Dagster OSS/Prefect/GitHub Actions when finalizing the Phase 5 orchestration choice.
 - Snowflake Semantic Views (Standard SQL querying GA March 2026) — warehouse-native semantic layer, zero extra cost
 - Snowflake Cortex Analyst — NL querying over semantic views, ~$5–15/month at hobby scale
 
@@ -117,6 +117,7 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analyticd w
 | Fivetran | Pricing restructured March 2025; per-connector costs increased 50–60% |
 | Jupyter | Replaced by Marimo — git-friendly, no hidden state, saves as Python files |
 | Docker | RAM constraint; not needed for this stack |
+| MotherDuck | Considered as a third portability target (alongside DuckDB/Snowflake) in June 2026; deprioritized — the interest is real but work-related, not specific to this project. DuckDB remains the local dev engine, Snowflake the named production target. |
 
 ---
 
@@ -174,14 +175,50 @@ ALTER USER DBT_SERVICE_USER SET RSA_PUBLIC_KEY='<paste_base64_here>';
 
 ---
 
+### Snowflake Role Hierarchy & Privilege Notes
+
+**Hierarchy (within a single account):**
+```
+ACCOUNTADMIN
+  ├── SECURITYADMIN
+  │      └── USERADMIN
+  └── SYSADMIN
+         └── (custom roles get granted here)
+
+PUBLIC — implicit floor every role gets
+```
+`ACCOUNTADMIN` inherits `SYSADMIN` and `SECURITYADMIN`'s privileges — not the other way around. `ORGADMIN` is a separate, org-level role for managing multiple Snowflake accounts; irrelevant for this single-account project.
+
+**Default role decision:** `SYSADMIN` is the default Snowsight role going forward, not `ACCOUNTADMIN`. Set via:
+```sql
+ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
+```
+`ACCOUNTADMIN` is reserved for genuinely account-level tasks only: resource monitors, billing, and rare service-account/user management. Full four-role rotation (`ACCOUNTADMIN`/`SECURITYADMIN`/`USERADMIN`/`SYSADMIN`) is enterprise ceremony that isn't worth it for a one-person project — two roles is the right-sized version here.
+
+**The gotcha (bit twice in Phase 3):** anything created through the Snowsight UI under your personal session is owned by whatever role that session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access — Snowflake's role hierarchy doesn't flow downward to it. This surfaced as two different error messages for two different object types:
+- **Table** (`RAW.GAMES`, loaded via the Catalog UI): `SQL compilation error: Object ... does not exist or not authorized` — Snowflake intentionally won't confirm whether an unauthorized role's target even exists.
+- **Warehouse** (`COMPUTE_WH`, owned by `ACCOUNTADMIN`): `No active warehouse selected in the current session` — the dbt-snowflake connector passes `warehouse:` as a connection parameter (an implicit `USE WAREHOUSE`); if the role lacks `USAGE` on it, the connector fails to set it *silently* rather than erroring at connect time. The error only surfaces later, when a query actually needs compute (which is also why a view model succeeded — `CREATE VIEW` is metadata-only — while table models failed immediately after).
+
+**Fix, either case:** grant the missing privilege explicitly, run as the object's owning role:
+```sql
+GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
+GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
+```
+Better long-term fix: switch the Snowsight role selector to `SYSADMIN` *before* doing any manual UI work (loading data, creating warehouses), so objects are owned by the right role from creation instead of needing retroactive grants.
+
+---
+
 ### Snowsight Navigation (as of June 2026)
 
-Snowsight was significantly reorganized. Key locations:
+Snowflake rolled out a navigation reorganization grouping features into new top-level categories: **Projects** (Worksheets/Workspaces, Notebooks, Streamlit, Dashboards), **Ingestion** (Add data, Migrations, Openflow, Copy history), **Transformation** (dbt projects, Tasks, Dynamic tables), **AI & ML** (Cortex, Snowflake ML), **Monitoring** (query history, container services, job history, traces/logs), **Marketplace**, **Catalog** (Database Explorer, internal marketplace, Apps), **Data sharing**, **Governance & security** (users & roles, network policies, tags & policies), **Compute** (warehouses, compute pools), and **Admin** (billing, contacts, partner connect).
 
-- **SQL editor (Workspaces):** Projects — Worksheets renamed to Workspaces as of April 2026
-- **Warehouses:** Admin → Compute
-- **Resource Monitors:** Admin → Cost Management
-- **Legacy Worksheets removed:** June 22, 2026
+Confirmed mappings worth remembering (old → new):
+- **Data → Databases** is now **Catalog → Database Explorer**
+- **dbt Projects** moved from Monitoring to **Transformation → dbt projects** — it is *not* nested under Workspaces, even though dbt project files are edited inside a Git-connected Workspace
+- **Query History** (and thus Query Profile) stayed put: **Monitoring → Query History**
+- **SQL editor:** Projects → Workspaces (renamed from Worksheets, April 20, 2026). **Legacy Worksheets removed June 22, 2026.**
+
+**Caveat:** this UI shifts often enough that exact nav paths shouldn't be trusted long-term without a quick re-check — already had to correct the Database Explorer and dbt Projects locations once this session. Treat anything written here as "true as of June 2026," not permanent.
 
 ---
 
@@ -243,13 +280,13 @@ rays_analytics:
 ### Data Model
 
 - **Source:** MLB Stats API (no auth required)
-- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake (not yet loaded — deferred to Phase 4)
+- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake — populated via a one-time manual CSV export/load from DuckDB (Phase 3 stopgap, run through Catalog → Database Explorer's load wizard). **This is not a real pipeline** — it exists only to unblock testing `dbt build` against Snowflake. Will be replaced entirely by the Phase 4 dlt pipeline.
 - **Rays team ID:** 139
 - **Seasons loaded:** 2022, 2023, 2024 (486 games)
 - **Star schema:** stg_games → dim_teams, dim_venues, fct_games
 - **44 tests** — not_null, unique, accepted_values, relationships
 
-**Known deprecation warning:** `MissingArgumentsPropertyInGenericTestDeprecation` on the `relationships` test in `models/marts/schema.yml`. Arguments to generic tests should be nested under an `arguments` property. To be fixed as remaining Phase 3 work.
+**Resolved:** the `MissingArgumentsPropertyInGenericTestDeprecation` warning on the `relationships` test in `models/marts/schema.yml` was fixed in PR #14 (nested arguments under an `arguments:` property, matching the existing `accepted_values` pattern).
 
 ---
 
@@ -269,6 +306,10 @@ rays_analytics:
 - Use `dbt --help` for command reference, not tldr
 - Python scripts run from project root `~/projects/rays-analytics/`, not the dbt subfolder
 - Never hardcode absolute file paths in Python scripts — use `os.getenv('VAR', 'relative/default')`
+- Default Snowsight role is `SYSADMIN`, not `ACCOUNTADMIN` — switch explicitly to `ACCOUNTADMIN` only for resource monitors, billing, or service-account management (see Snowflake Role Hierarchy notes)
+- `git config --global fetch.prune true` is set — every `fetch`/`pull` auto-removes local references to branches already deleted on the remote, so merged feature branches don't linger as stale tracking refs
+- GitHub has "automatically delete head branches" enabled — merged PR branches disappear from the remote immediately; local branches still need an explicit `git branch -d` after
+- Pull past PR descriptions from the CLI with `gh pr list --state all` then `gh pr view <number>` (or `--json body -q .body` for just the description text) — faster than digging through the GitHub UI
 
 ---
 
@@ -286,7 +327,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 
-**Phase 3 CI transition:** CI currently runs against DuckDB. Needs to be updated to generate a Snowflake `profiles.yml` dynamically using the service user private key stored as a GitHub Secret. The private key content (PKCS#8 format) goes in as a secret, gets written to a temp file during the CI run, and is referenced by path in the generated profile.
+**Dual-job architecture:** CI now runs two jobs. DuckDB runs on every PR (fast, free, catches structural errors — but SQL dialect differences mean DuckDB passing doesn't guarantee Snowflake passing). Snowflake only runs on merge to `main`, generating a `profiles.yml` dynamically using the service user's private key from a GitHub Secret — the key is written to a temp file during the run and referenced by path in the generated profile. Workload Identity Federation (Snowflake's preferred newer auth method) was researched and ruled out — unsupported in dbt-snowflake as of June 2026 — so key-pair auth is the deliberate, correct choice here, not a fallback.
 
 ---
 
@@ -304,7 +345,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 
 ---
 
-#### Phase 3 — Real Warehouse 🔄 IN PROGRESS
+#### Phase 3 — Real Warehouse ✅ COMPLETE
 
 **Goal:** Swap the dbt adapter from DuckDB to Snowflake, port all models, configure dev/prod environments, and establish cost controls.
 
@@ -318,20 +359,24 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - dbt-snowflake v1.11.4 installed ✅
 - profiles.yml updated — Snowflake as default dev target, DuckDB retained as dev_duck ✅
 - dbt debug passing ✅
+- `relationships` test deprecation warning fixed — PR #14 ✅
+- UV version corrected to 0.11.17 in docs — PR #15 ✅
+- GitHub Actions CI updated — dual-job architecture: DuckDB job runs on every PR (fast, free, structural validation), Snowflake job runs only on merge to `main` (real warehouse validation) using dynamically-generated key-pair profile ✅
+- GitHub Secrets configured — `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_PRIVATE_KEY`; `SNOWFLAKE_USER` hardcoded (not sensitive) ✅
+- Workload Identity Federation researched and ruled out — unsupported in dbt-snowflake as of June 2026; key-pair auth confirmed correct ✅
+- `RAYS_ANALYTICS.RAW.GAMES` populated via one-time manual CSV stopgap (486 games) ✅
+- Full `dbt build` passing against real Snowflake data — models and all 44 tests ✅
+- Snowflake privilege/RBAC gotcha hit and resolved twice (table + warehouse ownership) — see Role Hierarchy notes ✅
+- Query Profile explored on a compiled model ✅
+- dbt Projects on Snowflake explored (found unconfigured; deliberately deferred to Phase 5 decision) ✅
 
-**Remaining:**
-- Fix `relationships` test deprecation warning in `models/marts/schema.yml`
-- Update GitHub Actions CI — swap DuckDB profile generation for Snowflake key-pair profile
-- Store private key as GitHub Secret
-- Open Query Profile on a compiled model
-- Explore dbt Projects on Snowflake Workspaces
-- Data loading deferred to Phase 4 — `dbt build` will not fully pass until RAW.GAMES is populated
-
-**Skills locked in so far:** Snowflake architecture, cost monitoring, key-pair authentication, account identifier formats, dbt-snowflake adapter setup.
+**Skills locked in:** Snowflake architecture, cost monitoring, key-pair authentication, account identifier formats, dbt-snowflake adapter setup, dual-environment CI design (DuckDB/Snowflake split), GitHub Secrets-based service auth in CI, Snowflake RBAC hierarchy and privilege troubleshooting, reading a Query Profile (Statistics pane, partition pruning, why a view vs. table model behaves differently), Snowsight navigation literacy, recognizing when a throwaway stopgap is the right scope vs. pulling a future phase forward prematurely.
 
 ---
 
 #### Phase 4 — Ingestion (~2 weeks)
+
+**⚠️ Before starting:** revisit whether dlt + GitHub Actions are still the right ingestion/orchestration tools for this project — not yet fully convinced. Worth comparing against Snowflake's native **Openflow** (built on Apache NiFi, lives under the new Ingestion nav category) while reconsidering. This is a deliberate pause, not a default — don't start building until this is resolved.
 
 **Goal:** Replace `load_mlb_data.py` with a proper dlt pipeline; add Statcast data via pybaseball; configure Snowflake as destination; build staging models over dlt raw output; implement incremental loading.
 
@@ -341,7 +386,10 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - Incremental loading requires a cursor column — understand dlt state management
 - Update season list to include 2025 and 2026; update `accepted_values` tests accordingly
 - Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond
-- Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase
+- Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase — this replaces the manual CSV stopgap from Phase 3 entirely
+- **Dual-destination design:** the same dlt pipeline/extraction code should support both DuckDB and Snowflake as destinations, mirroring the `dev`/`dev_duck` split already in `profiles.yml`. dlt defaults to DuckDB as a local destination, so this isn't fighting the tool.
+- **Cadence is decoupled, not duplicated:** Snowflake ingestion runs on a real schedule (cron/GitHub Actions, independent of the laptop being on). DuckDB ingestion is invoked manually/on-demand by the developer right before doing model work — *not* on the same schedule. Don't build a local cron job just to keep DuckDB "in sync"; a local dev sandbox doesn't need to track production in lockstep, and trying to keep it live-synced just recreates standing infrastructure DuckDB was chosen specifically to avoid.
+- As part of this phase, also flip `profiles.yml`'s default local target from `dev` (Snowflake) to `dev_duck`, and confirm a full `dbt build` still passes cleanly against DuckDB before building anything new on top of it — carried over from Phase 3 wrap-up, not yet done.
 
 **Skills locked in:** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo.
 
@@ -355,6 +403,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - Dagster Cloud removed free credits May 1, 2026 — use Dagster OSS or Prefect Cloud free Hobby tier
 - Elementary: run `edr report` after dbt builds; configure Slack alerts for failures
 - Add dbt source freshness checks — stale dlt syncs surface as pipeline failures
+- **Also weigh dbt Projects on Snowflake** as a fourth option alongside Dagster OSS/Prefect/GitHub Actions when making the final call — it was explored but deliberately not adopted in Phase 3. Native Git-connected dbt execution inside Snowflake could plausibly replace some combination of the CI Snowflake job and a scheduler, worth a real comparison rather than defaulting to it just because it's already partly explored.
 
 **Skills locked in:** Asset-based orchestration, scheduled runs, dependency management, failure alerting, data observability, incident response.
 
@@ -405,25 +454,29 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 *Update this at the end of every working session.*
 
 **Last session:**
-- Created Snowflake trial account — Standard edition, AWS us-east-2
-- Configured Resource Monitor, warehouse, database, schemas
-- Created DBT_SERVICE_USER with TYPE = SERVICE and key-pair auth
-- Installed dbt-snowflake v1.11.4, updated profiles.yml
-- Worked through account identifier issues — URL slug differs from actual identifier; use `SELECT SYSTEM$ALLOWLIST()` to find the correct regional format
-- PKCS#8 key format required — standard `openssl genrsa` output (PKCS#1) fails with JWT error
-- `dbt debug` passing; `dbt build` fails only because RAW.GAMES does not exist yet — expected, data loading deferred to Phase 4
-- Snowsight UI reorganized — Worksheets is now Workspaces under Projects
+- Confirmed `fix/relationships-test-deprecation` (PR #14) and `docs/update-uv-version` (PR #15) were already merged via `git log main..<branch>` — both showed empty diffs, confirming full merge. Cleaned up local branches; remote branches were already auto-deleted by GitHub on merge.
+- Set `git config --global fetch.prune true` going forward.
+- Re-evaluated and confirmed the DuckDB-local/Snowflake-production split: it's already encoded in the CI dual-job architecture (DuckDB on every PR, Snowflake on merge). No new "Phase 3.5" needed — just a Phase 3 wrap-up item (flip local default target to `dev_duck`, not yet done) and a Phase 4 design decision (dlt dual destinations, decoupled cadence — see Phase 4 notes).
+- Deferred MotherDuck (work-related interest, not this project) and the weekly financials report idea (work-related only, not Rays Analytics scope).
+- Closed out remaining Phase 3 checklist:
+  - Loaded `RAW.GAMES` via one-time manual CSV stopgap from DuckDB
+  - Hit and resolved two separate Snowflake RBAC gotchas (table grant, then warehouse grant) — both caused by objects created under `ACCOUNTADMIN` via the Snowsight UI not being accessible to `SYSADMIN` (the role `DBT_SERVICE_USER` runs as)
+  - Full `dbt build` passing against Snowflake with real data, row counts verified correct
+  - Decided `SYSADMIN` as default Snowsight role going forward; `ACCOUNTADMIN` reserved for account-level tasks only
+  - Explored Query Profile — found partition pruning lives in the Statistics pane (whole-query view, or per-table by selecting a TableScan node); trivial at this data volume since everything fits in one micro-partition
+  - Explored dbt Projects on Snowflake — found unconfigured, requires GitHub API integration + Git-connected Workspace to set up; deliberately deferred to the Phase 5 orchestration decision
+  - Caught and corrected a Snowsight navigation drift from training data (Database Explorer now under Catalog, dbt Projects now under Transformation)
+- Phase 3 marked complete.
 
-**Active branch:** `main` (no feature branch open)
+**Active branch:** `main` (clean; `fix/relationships-test-deprecation` and `docs/update-uv-version` deleted locally after confirming merge)
 
 **Next actions:**
-1. Open a feature branch
-2. Fix `relationships` deprecation warning in `models/marts/schema.yml`
-3. Update GitHub Actions CI — dynamic profiles.yml with key-pair auth, private key as GitHub Secret
-4. Commit updated CLAUDE.md
+1. Confirm `ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;` was actually run (discussed, not explicitly confirmed executed)
+2. Flip local `profiles.yml` default target to `dev_duck`; confirm `dbt build` still passes clean against DuckDB (Phase 3 wrap-up, carried into Phase 4 prep)
+3. Before writing any Phase 4 code: resolve the dlt/GitHub Actions tooling re-evaluation (compare against Snowflake Openflow, among others)
+4. Once tooling is settled, begin Phase 4 with the dual-destination dlt design already decided
 
 **Decisions made this session not captured elsewhere:**
-- Snowflake CoCo (formerly Cortex Code) announced at Summit — Snowflake's AI coding agent, not relevant to this stack at this phase
-- AWS us-east-2 chosen — lowest on-demand credit cost, most common in job descriptions
-- Regionless account identifier format did not work with dbt; regional format required
-- Service user TYPE = SERVICE set correctly from day one per Snowflake auth deprecation rollout
+- No new phase number for "DuckDB-first dev workflow" — it's a discipline applied within Phase 4, not a separate phase
+- Two-role default for day-to-day Snowsight use (`SYSADMIN` default, `ACCOUNTADMIN` for account-level only) — full four-role rotation judged as enterprise ceremony not worth it solo
+- Snowflake Optima Metadata (automatic pruning metadata for high-frequency query patterns) noted as existing but not relevant at current hobby-project query volume
