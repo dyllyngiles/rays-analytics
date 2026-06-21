@@ -60,4 +60,4 @@ dbt model documentation is published to GitHub Pages:
 
 ## CI
 
-Every PR to `main` runs a full pipeline: loads data, runs `dbt build`, and executes all tests. Actions are pinned to exact commit hashes (not floating tags) and dependencies are audited against the OSV vulnerability database on every run.
+Two-job pipeline on GitHub Actions. Every PR to `main` runs a DuckDB job — installs dependencies, runs `dbt build` against a local DuckDB file, and executes all tests. On merge to `main`, a second Snowflake job runs the same build against the real warehouse using key-pair authentication via GitHub Secrets. Actions are pinned to exact commit hashes (not floating tags) and dependencies are audited against the OSV vulnerability database on every run.
