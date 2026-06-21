@@ -12,6 +12,12 @@
 
 My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics with some dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
 
+**Why I'm actually doing this project:** curiosity and enjoyment, full stop. Job marketability and patterns transferable to my day job are real and welcome, but they are not the filter for what's worth exploring. Don't gate discussing, exploring, or prototyping an idea behind "does this earn its place" — that scrutiny is for decisions about what becomes permanent, maintained stack infrastructure, not for whether something's worth looking at. Default to following interesting tangents.
+
+That said, I still want honest pushback when something is actually unsound, outdated, or solving a problem that doesn't exist — that's different from ROI-gating, and I want it regardless of how fun the idea sounded going in. Real constraint I do care about: I'm not trying to spend a lot of money. Feel free to flag other practical parameters as they come up — ongoing maintenance burden (separate from whether something's resume-worthy), new credentials meaning new security surface area, and the 16GB RAM ceiling on my machine are the ones that have come up so far.
+
+I'm also deliberately trying to soak up hands-on Snowflake experience while I have access to it — I'm not sure I'll get to use it professionally again, so going deep on platform-specific exploration (Query Profile, role hierarchy, catalog mechanics) is worth it on its own terms, not just when it's strictly needed for the build. Same applies to DuckDB once Phase 4 work resumes.
+
 ---
 
 ### My Machine
@@ -64,6 +70,8 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics w
 | Layer | Tool | Notes |
 |---|---|---|
 | Ingestion | dlt | Python library, no Docker |
+| Bronze storage | Amazon S3 | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
+| Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Free during current billing period; resolves CI reachability; same software as self-hosted Polaris if revisited later |
 | Warehouse (local dev) | DuckDB | Gitignored, single-file |
 | Warehouse (cloud) | Snowflake | ~$30–40/month, X-Small, 60-sec auto-suspend |
 | Transformation | dbt Core + dbt-snowflake | |
@@ -92,6 +100,13 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics w
 
 **Why Dagster OSS or Prefect over Dagster Cloud:** Dagster Cloud removed free credits from Solo and Starter plans May 1, 2026 — every asset materialization is now billed from zero at ~$0.035–0.040/credit with no grandfathering. Dagster OSS running locally as a Python process, or Prefect Cloud free Hobby tier (2 users, 5 workflows, 500 minutes serverless compute, no credit card required), covers the same learning goals.
 
+**Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (decided June 2026):** Adding a bronze layer — raw data landing in S3 as Iceberg tables instead of being loaded directly into Snowflake — decouples storage from compute. Snowflake and DuckDB can both read the exact same physical files without separate load steps, extending the dbt-portability thesis (swap transformation engines, same SQL) to the storage layer (swap query engines, same data). Three catalog options were weighed:
+- **Self-hosted Apache Polaris** — full control, fully open-source, but introduces a server only reachable from the Mac Mini. This breaks CI: GitHub Actions runners can't reach a catalog running on a laptop. Real problem starting at Phase 4, not a someday-Phase-8 concern.
+- **AWS Glue** — zero-ops, matches the AWS dependency already accepted via S3, and the market-leading catalog by adoption. But it's proprietary, and doesn't extend the open-source-first preference (dbt Core, Iceberg, OSI) the way Polaris does.
+- **Snowflake Open Catalog** — won. It's a managed hosting of the *actual* open-source Apache Polaris (same software, same principal/role model), free during the current billing period (0.5 credits/million requests after — negligible at hobby scale), and reachable by both local dev and CI since it's not self-hosted.
+
+Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs the identical software, switching to self-hosting later (for the hands-on "I ran this myself" experience) costs little beyond re-registering a handful of tables and re-pointing engine configs. Whichever catalog is active, only one should ever write to a given S3 location — never register the same Iceberg table in two catalogs simultaneously.
+
 **Why Evidence over Metabase:** Code-first, Git-native, designed for analytics engineers. Fits the everything-as-code philosophy of the stack. Cube Cloud free tier is dev/test only — if it changes, Cube Core runs as a local Node process at zero cost: `npm install -g @cubejs-backend/cli`.
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
@@ -118,6 +133,7 @@ My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics w
 | Jupyter | Replaced by Marimo — git-friendly, no hidden state, saves as Python files |
 | Docker | RAM constraint; not needed for this stack |
 | MotherDuck | Considered as a third portability target (alongside DuckDB/Snowflake) in June 2026; deprioritized — the interest is real but work-related, not specific to this project. DuckDB remains the local dev engine, Snowflake the named production target. |
+| AWS Glue | Considered for the Iceberg catalog; zero-ops and matches the existing AWS dependency via S3, but proprietary — doesn't extend the open-source-first preference the way Polaris/Open Catalog does. Revisit only if Open Catalog's cost or limits become a real problem. |
 
 ---
 
@@ -187,7 +203,7 @@ ACCOUNTADMIN
 
 PUBLIC — implicit floor every role gets
 ```
-`ACCOUNTADMIN` inherits `SYSADMIN` and `SECURITYADMIN`'s privileges — not the other way around. `ORGADMIN` is a separate, org-level role for managing multiple Snowflake accounts; irrelevant for this single-account project.
+`ACCOUNTADMIN` inherits `SYSADMIN` and `SECURITYADMIN`'s privileges — not the other way around. `ORGADMIN` is a separate, org-level role for managing multiple Snowflake accounts; mostly irrelevant for this single-account project, with one exception: **`ORGADMIN` is required to create a Snowflake Open Catalog account** (see Bronze Layer & Iceberg Catalog notes below).
 
 **Default role decision:** `SYSADMIN` is the default Snowsight role going forward, not `ACCOUNTADMIN`. Set via:
 ```sql
@@ -205,6 +221,25 @@ GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
 GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
 ```
 Better long-term fix: switch the Snowsight role selector to `SYSADMIN` *before* doing any manual UI work (loading data, creating warehouses), so objects are owned by the right role from creation instead of needing retroactive grants.
+
+---
+
+### Bronze Layer & Iceberg Catalog Notes
+
+**Architecture:** raw data lands in S3 (us-east-2, same region as Snowflake) as Iceberg tables, cataloged through Snowflake Open Catalog. Snowflake and DuckDB both read from this same physical location as separate engines — the catalog resolves "what does this table currently look like" for whichever engine asks. See Key Architectural Decisions in Part 1 for the full reasoning on why Open Catalog won over self-hosted Polaris and AWS Glue.
+
+**Setup requirements:**
+- `ORGADMIN` role to create the Open Catalog account itself (one-time, org-level action — the one real exception to "ORGADMIN is irrelevant here")
+- An S3 bucket in us-east-2, with IAM credentials scoped to it
+- A storage configuration in Open Catalog pointing at that bucket
+
+**Cost:** free during the current billing period; 0.5 credits/million requests once billing starts (~$1/million requests at Standard edition rates) — negligible at this project's query volume.
+
+**Single-writer rule:** only one catalog should ever write to a given S3 Iceberg location. Registering the same table in two catalogs (e.g., both Open Catalog and a self-hosted Polaris instance) risks both silently corrupting each other's metadata pointers, since they don't share transaction state.
+
+**Switching catalogs later, if ever needed:** because Iceberg tables are self-describing (metadata files already sit in S3 next to the data), switching catalogs is a re-registration + re-pointing operation, not a data migration — the files never move. At this project's table count (low single digits to maybe a dozen post-Statcast), that's an afternoon of work, not a project. Switching specifically between Open Catalog and self-hosted Polaris is the cheapest direction, since they're the same software with the same principal/role model — only the AWS Glue direction requires learning a genuinely different auth model (plain IAM instead of principals/catalog-roles).
+
+**Self-hosted Polaris status:** deferred, not rejected. If the hands-on "ran the server myself" experience becomes its own pebble worth chasing later, the switch from Open Catalog is low-friction for the reasons above. Lakekeeper (Rust, single-binary, lighter footprint than Polaris's JVM+Postgres) is worth a look as an alternative self-hosting target if/when that day comes — same open-source values fit, less weight on the Mac Mini.
 
 ---
 
@@ -310,6 +345,8 @@ rays_analytics:
 - `git config --global fetch.prune true` is set — every `fetch`/`pull` auto-removes local references to branches already deleted on the remote, so merged feature branches don't linger as stale tracking refs
 - GitHub has "automatically delete head branches" enabled — merged PR branches disappear from the remote immediately; local branches still need an explicit `git branch -d` after
 - Pull past PR descriptions from the CLI with `gh pr list --state all` then `gh pr view <number>` (or `--json body -q .body` for just the description text) — faster than digging through the GitHub UI
+- **Repo audited clean (June 2026):** confirmed via `git ls-files` (nothing sensitive currently tracked) and `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty — none of those filenames have ever touched git history, not even in a deleted commit). Worth re-running both checks periodically rather than assuming `.gitignore` alone proves anything about the past.
+- **One-off exports never get committed.** `.gitignore` includes `/games_export.csv` and `/scratch/` specifically for throwaway data dumps (e.g. the Phase 3 CSV stopgap) — delete them when done, or park them in `/scratch/` if you want to keep them around locally. Don't let scratch files ride along in an unrelated commit.
 
 ---
 
@@ -324,6 +361,13 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 **Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted.
 
 **Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required.
+
+**`uv audit` can fail a PR for reasons that have nothing to do with that PR.** It audits whatever's currently pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved transitive dependency can fail CI on a completely unrelated change (hit this on a docs-only PR — `cryptography` and `msgpack` both had patched CVEs). Fix is a narrow lockfile bump, not a full re-resolve:
+```bash
+uv lock --upgrade-package cryptography --upgrade-package msgpack
+uv sync --locked
+```
+Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 
@@ -387,11 +431,12 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 - Update season list to include 2025 and 2026; update `accepted_values` tests accordingly
 - Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond
 - Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase — this replaces the manual CSV stopgap from Phase 3 entirely
-- **Dual-destination design:** the same dlt pipeline/extraction code should support both DuckDB and Snowflake as destinations, mirroring the `dev`/`dev_duck` split already in `profiles.yml`. dlt defaults to DuckDB as a local destination, so this isn't fighting the tool.
-- **Cadence is decoupled, not duplicated:** Snowflake ingestion runs on a real schedule (cron/GitHub Actions, independent of the laptop being on). DuckDB ingestion is invoked manually/on-demand by the developer right before doing model work — *not* on the same schedule. Don't build a local cron job just to keep DuckDB "in sync"; a local dev sandbox doesn't need to track production in lockstep, and trying to keep it live-synced just recreates standing infrastructure DuckDB was chosen specifically to avoid.
+- **Bronze layer architecture (decided June 2026, supersedes the earlier dual-destination dlt plan):** dlt writes once — landing raw data as Iceberg tables in S3, cataloged via Snowflake Open Catalog. Snowflake and DuckDB both *read* from that same bronze location as two separate engines; dlt no longer needs to maintain two load destinations. One-time setup: an `ORGADMIN`-created Open Catalog account, an S3 bucket in the same region as Snowflake (us-east-2), and IAM credentials scoped to that bucket.
+- **Cadence, simplified by the bronze layer:** there's now only one write cadence to think about — when fresh data lands in S3 (scheduled via cron/GitHub Actions for the "production" cadence). Snowflake and DuckDB both read live from whatever's currently in the bronze layer at query time; DuckDB no longer needs its own separate on-demand load step, since reading is reading regardless of which engine does it.
+- **Single-writer discipline:** only Open Catalog should ever write to the bronze S3 location. Never register the same Iceberg table in two catalogs at once — they don't share transaction state and will corrupt each other's metadata pointers.
 - As part of this phase, also flip `profiles.yml`'s default local target from `dev` (Snowflake) to `dev_duck`, and confirm a full `dbt build` still passes cleanly against DuckDB before building anything new on top of it — carried over from Phase 3 wrap-up, not yet done.
 
-**Skills locked in:** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo.
+**Skills locked in:** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo, Iceberg table format and REST catalog mechanics, S3/IAM setup, storage-layer portability (multiple engines reading one physical dataset).
 
 ---
 
@@ -474,7 +519,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to mai
 1. Confirm `ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;` was actually run (discussed, not explicitly confirmed executed)
 2. Flip local `profiles.yml` default target to `dev_duck`; confirm `dbt build` still passes clean against DuckDB (Phase 3 wrap-up, carried into Phase 4 prep)
 3. Before writing any Phase 4 code: resolve the dlt/GitHub Actions tooling re-evaluation (compare against Snowflake Openflow, among others)
-4. Once tooling is settled, begin Phase 4 with the dual-destination dlt design already decided
+4. Once tooling is settled, begin Phase 4 with the bronze layer design already decided (S3 + Iceberg, cataloged via Snowflake Open Catalog)
 
 **Decisions made this session not captured elsewhere:**
 - No new phase number for "DuckDB-first dev workflow" — it's a discipline applied within Phase 4, not a separate phase
