@@ -18,7 +18,6 @@ rays_perspective as (
         game_started_at,
         season,
         venue_id,
-        venue_name,
         game_status,
         home_team_id = 139                                                      as is_home_game,
         case when home_team_id = 139 then 'home' else 'away' end                as game_location,
