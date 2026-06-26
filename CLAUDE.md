@@ -10,13 +10,13 @@
 
 ### About Me
 
-My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I work in analytics with some dbt experience but no modern cloud warehouse experience. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
+My name is Dyllyn Giles. I'm based in Lexington, Kentucky. I came in with dbt and BI experience but no hands-on modern cloud warehouse experience — this project is where that's been built from scratch. My goal is to build a complete, portfolio-ready modern ELT stack for learning and career development. My personal knowledge system is a pencil and notebook. I prefer to understand what I'm doing rather than just following commands.
 
 **Why I'm actually doing this project:** curiosity and enjoyment, full stop. Job marketability and patterns transferable to my day job are real and welcome, but they are not the filter for what's worth exploring. Don't gate discussing, exploring, or prototyping an idea behind "does this earn its place" — that scrutiny is for decisions about what becomes permanent, maintained stack infrastructure, not for whether something's worth looking at. Default to following interesting tangents.
 
 That said, I still want honest pushback when something is actually unsound, outdated, or solving a problem that doesn't exist — that's different from ROI-gating, and I want it regardless of how fun the idea sounded going in. Real constraint I do care about: I'm not trying to spend a lot of money. Feel free to flag other practical parameters as they come up — ongoing maintenance burden (separate from whether something's resume-worthy), new credentials meaning new security surface area, and the 16GB RAM ceiling on my machine are the ones that have come up so far.
 
-I'm also deliberately trying to soak up hands-on Snowflake experience while I have access to it — I'm not sure I'll get to use it professionally again, so going deep on platform-specific exploration (Query Profile, role hierarchy, catalog mechanics) is worth it on its own terms, not just when it's strictly needed for the build. Same applies to DuckDB once Phase 4 work resumes.
+I'm also deliberately going deep on platform-specific exploration (Query Profile, role hierarchy, catalog mechanics) on its own terms, not just when strictly needed for the build. Same applies to DuckDB once Phase 4 work resumes.
 
 ---
 
@@ -83,6 +83,26 @@ I'm also deliberately trying to soak up hands-on Snowflake experience while I ha
 | Notebooks | Marimo | Added in Phase 4 |
 | AI development | Claude Pro + Claude Code + Anthropic API | Phase 7+ |
 
+### Scope Tracks (added June 2026)
+
+Roadmap is split into two tracks so the application timeline isn't gated by platform-depth exploration that's fun but not required.
+
+**Core path (apply-ready, collapsed timeline):**
+- Phase 4, slimmed: dlt → Snowflake `RAW` directly. No bronze/Iceberg layer in this pass — closes the manual-CSV-stopgap gap without the storage-layer detour.
+- Phase 5, slimmed: GitHub Actions with an explicit scheduled dependency between loader and `dbt build`. No orchestrator bake-off required for core.
+- Phase 6, elevated: MetricFlow + Snowflake Semantic Views are core deliverables, not optional — this is the project's strongest differentiator for analytics-engineering-style work. Cube's necessity is being reconsidered (see Key Architectural Decisions).
+- Phase 8, pulled forward: README + walkthrough — cheap, high-leverage, doesn't depend on other phases finishing.
+- New, low-effort, could land early: a public self-serve demo — Evidence's Universal SQL (DuckDB-WASM) running live SQL in the visitor's browser against exported Parquet snapshots of the mart/metrics layer, deployed as a static GitHub Pages site. Zero backend, zero cost, zero credentials exposed.
+
+**Bonus / platform-depth track (curiosity-driven, no deadline, doesn't block applying):**
+- Bronze layer: S3 + Iceberg + Snowflake Open Catalog, with a future self-hosted Polaris or Lakekeeper experiment
+- Orchestration bake-off: Dagster OSS vs. Prefect vs. dbt Projects on Snowflake (Airflow exposure optional — common in AE postings but not required; concepts transfer)
+- Deep Snowflake platform exploration: Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit in Snowflake
+- Phase 7 AI/MCP layer, including a MotherDuck Dives sandbox experiment (needs a throwaway data copy living in MotherDuck — not a stack decision)
+- Self-serve BI tool decision: Lightdash (dbt-native metrics layer, genuine point-and-click self-serve — but self-hosting needs Docker, which conflicts with the no-Docker stance and needs a deliberate call) vs. Metabase (no Docker, but metrics get redefined in Metabase itself instead of inheriting from dbt)
+
+---
+
 **Snowflake-native additions (Phase 3+):**
 - dbt Projects on Snowflake (GA November 2025) — run dbt Core natively inside Snowflake, via a Git-connected Workspace + a deployed `DBT PROJECT` object. Explored in Phase 3 (currently unconfigured — requires a GitHub API integration and a Git-connected Workspace to populate). Deferred — will be weighed against Dagster OSS/Prefect/GitHub Actions when finalizing the Phase 5 orchestration choice.
 - Snowflake Semantic Views (Standard SQL querying GA March 2026) — warehouse-native semantic layer, zero extra cost
@@ -96,18 +116,26 @@ I'm also deliberately trying to soak up hands-on Snowflake experience while I ha
 
 **Why dlt over Airbyte:** Airbyte is Docker-heavy, its free tier has been uncertain, and dlt teaches ingestion at code level rather than abstracting it behind a UI. Engineering-driven teams increasingly use dlt as their first choice.
 
+**Why dlt over Snowflake Openflow (resolved June 2026):** Openflow is the right tool when a source is one of its ~20 supported connectors and no customization is needed. MLB Stats API and pybaseball/Statcast are bespoke sources outside that list — exactly dlt's home turf. Openflow also requires standing up real infrastructure (BYOC in a VPC, or Snowpark Container Services) for a single custom source, which cuts against both the RAM ceiling and the open-source-portability thesis, since Openflow's orchestration layer is Snowflake-proprietary even though NiFi underneath is open. dlt remains the right call, full stop — no longer an open question gating Phase 4.
+
 **Why MetricFlow + Cube over dbt Cloud:** MetricFlow YAML is the OSI v1.0 reference implementation — learning it now means learning the emerging industry standard for semantic layers. Cube provides the API exposure layer that dbt Cloud would otherwise lock behind $100/month. The combination covers the full workflow at zero cost.
+
+**Cube's necessity reconsidered (added June 2026):** Cube's job is exposing governed metrics over an API for other tools to consume — it isn't itself a place where someone self-serves a dashboard. The better target experience is "anyone can click around and build their own view," which Cube doesn't provide on its own. MetricFlow + Snowflake Semantic Views stay core regardless; Cube is now optional pending the Phase 6 BI-tool decision (Lightdash/Metabase/Evidence, see Scope Tracks above).
 
 **Why Dagster OSS or Prefect over Dagster Cloud:** Dagster Cloud removed free credits from Solo and Starter plans May 1, 2026 — every asset materialization is now billed from zero at ~$0.035–0.040/credit with no grandfathering. Dagster OSS running locally as a Python process, or Prefect Cloud free Hobby tier (2 users, 5 workflows, 500 minutes serverless compute, no credit card required), covers the same learning goals.
 
-**Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (decided June 2026):** Adding a bronze layer — raw data landing in S3 as Iceberg tables instead of being loaded directly into Snowflake — decouples storage from compute. Snowflake and DuckDB can both read the exact same physical files without separate load steps, extending the dbt-portability thesis (swap transformation engines, same SQL) to the storage layer (swap query engines, same data). Three catalog options were weighed:
-- **Self-hosted Apache Polaris** — full control, fully open-source, but introduces a server only reachable from the Mac Mini. This breaks CI: GitHub Actions runners can't reach a catalog running on a laptop. Real problem starting at Phase 4, not a someday-Phase-8 concern.
+**Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (decided June 2026; rescoped to bonus track):** Adding a bronze layer — raw data landing in S3 as Iceberg tables instead of being loaded directly into Snowflake — decouples storage from compute. Snowflake and DuckDB can both read the exact same physical files without separate load steps, extending the dbt-portability thesis (swap transformation engines, same SQL) to the storage layer (swap query engines, same data). Three catalog options were weighed:
+- **Self-hosted Apache Polaris** — full control, fully open-source, but introduces a server only reachable from the Mac Mini. This breaks CI: GitHub Actions runners can't reach a catalog running on a laptop.
 - **AWS Glue** — zero-ops, matches the AWS dependency already accepted via S3, and the market-leading catalog by adoption. But it's proprietary, and doesn't extend the open-source-first preference (dbt Core, Iceberg, OSI) the way Polaris does.
 - **Snowflake Open Catalog** — won. It's a managed hosting of the *actual* open-source Apache Polaris (same software, same principal/role model), free during the current billing period (0.5 credits/million requests after — negligible at hobby scale), and reachable by both local dev and CI since it's not self-hosted.
 
-Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs the identical software, switching to self-hosting later (for the hands-on "I ran this myself" experience) costs little beyond re-registering a handful of tables and re-pointing engine configs. Whichever catalog is active, only one should ever write to a given S3 location — never register the same Iceberg table in two catalogs simultaneously.
+Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs the identical software, switching to self-hosting later (for the hands-on "I ran this myself" experience) costs little beyond re-registering a handful of tables and re-pointing engine configs. Whichever catalog is active, only one should ever write to a given S3 location — never register the same Iceberg table in two catalogs simultaneously. **This entire decision now lives in the bonus track (see Scope Tracks above) — core Phase 4 writes dlt straight into Snowflake `RAW`, no bronze layer, to keep the application timeline unblocked.** The architecture and reasoning stand for whenever the bonus-track work resumes.
 
 **Why Evidence over Metabase:** Code-first, Git-native, designed for analytics engineers. Fits the everything-as-code philosophy of the stack. Cube Cloud free tier is dev/test only — if it changes, Cube Core runs as a local Node process at zero cost: `npm install -g @cubejs-backend/cli`.
+
+**Public self-serve demo, added June 2026:** Evidence ships a DuckDB engine to the browser via WebAssembly (Universal SQL) — filters and dropdowns run live SQL client-side against Parquet snapshots, with no server round-trip. That means a static GitHub Pages site, built from exported mart/metrics Parquet files, can let any visitor interact with the data live in their own browser — no backend, no credentials exposed, no per-visitor cost. This is a separate use case from the Lightdash/Metabase self-serve BI decision below: it's for a public, zero-infra, anyone-with-a-browser experience, not an internal team tool. Perspective (FINOS) is the candidate if literal drag-and-drop pivoting matters more than Evidence's filter-driven interactivity — decision deferred until this gets built.
+
+**Self-serve BI tool decision, added June 2026, deferred to Phase 6:** Lightdash reads metrics/dimensions directly from dbt YAML and gives a genuine point-and-click explorer for non-technical users — closer to the "anyone can build their own dashboard" goal than Cube+Evidence ever was. The catch: standard self-hosting runs on Docker (Node + Postgres), which conflicts with the no-Docker stance — worth a deliberate call (reconsider Docker for this one component vs. Lightdash Cloud's trial vs. Metabase as the no-Docker alternative, which trades away dbt-native metric governance). Not yet decided.
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
 
@@ -134,6 +162,7 @@ Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs th
 | Docker | RAM constraint; not needed for this stack |
 | MotherDuck | Considered as a third portability target (alongside DuckDB/Snowflake) in June 2026; deprioritized — the interest is real but work-related, not specific to this project. DuckDB remains the local dev engine, Snowflake the named production target. |
 | AWS Glue | Considered for the Iceberg catalog; zero-ops and matches the existing AWS dependency via S3, but proprietary — doesn't extend the open-source-first preference the way Polaris/Open Catalog does. Revisit only if Open Catalog's cost or limits become a real problem. |
+| Airflow | Shows up frequently in AE job postings, but not required — asset-based orchestration concepts (DAGs, dependencies, retries, scheduling) transfer from Dagster/Prefect. Not worth standing up just for resume-keyword matching; added June 2026. |
 
 ---
 
@@ -418,57 +447,59 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ---
 
-#### Phase 4 — Ingestion (~2 weeks)
+#### Phase 4 — Ingestion (~1 week, slimmed for core path)
 
-**⚠️ Before starting:** revisit whether dlt + GitHub Actions are still the right ingestion/orchestration tools for this project — not yet fully convinced. Worth comparing against Snowflake's native **Openflow** (built on Apache NiFi, lives under the new Ingestion nav category) while reconsidering. This is a deliberate pause, not a default — don't start building until this is resolved.
+**Resolved June 2026:** dlt over Openflow — see Key Architectural Decisions. No longer a blocking pause.
 
-**Goal:** Replace `load_mlb_data.py` with a proper dlt pipeline; add Statcast data via pybaseball; configure Snowflake as destination; build staging models over dlt raw output; implement incremental loading.
+**Core goal:** Replace `load_mlb_data.py` with a proper dlt pipeline writing directly into `RAYS_ANALYTICS.RAW`; add Statcast data via pybaseball; build staging models over dlt raw output; implement incremental loading. **No bronze/Iceberg layer in this pass** — that work is rescoped to the bonus track (see Scope Tracks, Part 1).
 
 **Key notes:**
 - Install dlt and Marimo with `uv add dlt marimo`
-- dlt lands raw data in the RAW schema; add dbt sources YAML pointing at dlt's raw tables
+- dlt lands raw data directly in Snowflake's `RAW` schema; add dbt sources YAML pointing at dlt's raw tables
 - Incremental loading requires a cursor column — understand dlt state management
 - Update season list to include 2025 and 2026; update `accepted_values` tests accordingly
 - Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond
 - Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase — this replaces the manual CSV stopgap from Phase 3 entirely
-- **Bronze layer architecture (decided June 2026, supersedes the earlier dual-destination dlt plan):** dlt writes once — landing raw data as Iceberg tables in S3, cataloged via Snowflake Open Catalog. Snowflake and DuckDB both *read* from that same bronze location as two separate engines; dlt no longer needs to maintain two load destinations. One-time setup: an `ORGADMIN`-created Open Catalog account, an S3 bucket in the same region as Snowflake (us-east-2), and IAM credentials scoped to that bucket.
-- **Cadence, simplified by the bronze layer:** there's now only one write cadence to think about — when fresh data lands in S3 (scheduled via cron/GitHub Actions for the "production" cadence). Snowflake and DuckDB both read live from whatever's currently in the bronze layer at query time; DuckDB no longer needs its own separate on-demand load step, since reading is reading regardless of which engine does it.
-- **Single-writer discipline:** only Open Catalog should ever write to the bronze S3 location. Never register the same Iceberg table in two catalogs at once — they don't share transaction state and will corrupt each other's metadata pointers.
 - As part of this phase, also flip `profiles.yml`'s default local target from `dev` (Snowflake) to `dev_duck`, and confirm a full `dbt build` still passes cleanly against DuckDB before building anything new on top of it — carried over from Phase 3 wrap-up, not yet done.
 
-**Skills locked in:** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo, Iceberg table format and REST catalog mechanics, S3/IAM setup, storage-layer portability (multiple engines reading one physical dataset).
+**Bonus-track note (when revisited):** S3 + Iceberg + Snowflake Open Catalog bronze layer — dlt writes once to S3 as Iceberg tables, Snowflake and DuckDB both read from that bronze location as separate engines. One-time setup: an `ORGADMIN`-created Open Catalog account, an S3 bucket in us-east-2, IAM credentials scoped to that bucket. Single-writer discipline: only Open Catalog should ever write to the bronze S3 location.
+
+**Skills locked in (core):** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo.
+
+**Skills locked in (bonus, when revisited):** Iceberg table format and REST catalog mechanics, S3/IAM setup, storage-layer portability (multiple engines reading one physical dataset).
 
 ---
 
-#### Phase 5 — Orchestration and Observability (~2 weeks)
+#### Phase 5 — Orchestration and Observability (~1 week core, bonus extends it)
 
-**Goal:** Wrap dbt and dlt in Dagster assets or Prefect flows; define explicit dependency between loader and build; schedule the full pipeline; wire up Elementary and Slack alerts; deliberately break something.
+**Core goal:** An explicit, scheduled dependency between the dlt loader and `dbt build` — a GitHub Actions cron job satisfies this functionally. Wire up Elementary and Slack alerts; deliberately break something.
 
-**Key notes:**
-- Dagster Cloud removed free credits May 1, 2026 — use Dagster OSS or Prefect Cloud free Hobby tier
+**Key notes (core):**
 - Elementary: run `edr report` after dbt builds; configure Slack alerts for failures
 - Add dbt source freshness checks — stale dlt syncs surface as pipeline failures
-- **Also weigh dbt Projects on Snowflake** as a fourth option alongside Dagster OSS/Prefect/GitHub Actions when making the final call — it was explored but deliberately not adopted in Phase 3. Native Git-connected dbt execution inside Snowflake could plausibly replace some combination of the CI Snowflake job and a scheduler, worth a real comparison rather than defaulting to it just because it's already partly explored.
 
-**Skills locked in:** Asset-based orchestration, scheduled runs, dependency management, failure alerting, data observability, incident response.
+**Bonus-track note:** Asset-based orchestration (Dagster OSS, Prefect Cloud free Hobby tier, or dbt Projects on Snowflake) buys lineage visualization, backfills, sensors, and run-history UI over a plain cron job — genuinely useful concepts, not required for a working pipeline. Dagster Cloud removed free credits from Solo/Starter plans May 1, 2026, so Dagster OSS or Prefect Cloud free tier are the candidates if/when this gets picked up. Also weigh dbt Projects on Snowflake (native Git-connected dbt execution inside Snowflake) as a fourth option — explored but not adopted in Phase 3.
+
+**Skills locked in (core):** Scheduled runs, explicit pipeline dependency, failure alerting, data observability, incident response.
+
+**Skills locked in (bonus):** Asset-based orchestration, dependency-graph visualization, backfills.
 
 ---
 
-#### Phase 6 — Semantic Layer (~2 weeks)
+#### Phase 6 — Semantic Layer (~2 weeks) — CORE, elevated from earlier draft
 
-**Goal:** Define MetricFlow semantic models and metrics; create Snowflake Semantic Views on top of the mart layer; expose metrics via Cube; build and deploy an Evidence report.
+**Goal:** Define MetricFlow semantic models and metrics; create Snowflake Semantic Views on top of the mart layer. This is the project's most differentiating deliverable, not a nice-to-have.
 
 **Key notes:**
 - MetricFlow YAML is the OSI v1.0 reference implementation
-- Cube Cloud free tier is for dev/test only; Cube Core runs locally: `npm install -g @cubejs-backend/cli`
-- Connect Evidence to Cube's API, not directly to Snowflake
-- Deploy Evidence report to Vercel free tier or GitHub Pages
+- **Self-serve BI tool decision (was: Cube + Evidence by default, now open):** Cube's API-exposure model doesn't actually give a non-technical person a click-around self-serve experience. Decide between: (a) Lightdash — dbt-native metrics, genuine point-and-click explorer, but self-hosting needs Docker; (b) Metabase — no Docker, but metrics live in Metabase, not dbt; (c) keep Cube + Evidence if the API-first pattern is still worth demonstrating on its own. Not yet decided — see Key Architectural Decisions.
+- **New core-path artifact:** the public self-serve demo — Evidence's Universal SQL (DuckDB-WASM) over exported Parquet snapshots of the mart/metrics layer, deployed to GitHub Pages, zero backend. This is a separate, lower-effort thing from the internal BI tool decision above and could land earlier than the rest of this phase.
 
-**Skills locked in:** MetricFlow YAML, Snowflake Semantic Views, Cube as API-first semantic layer, BI consumption of governed metrics, full author-to-consume workflow.
+**Skills locked in:** MetricFlow YAML, Snowflake Semantic Views, governed-metrics-to-BI-consumption workflow, in-browser analytical engines (DuckDB-WASM) for zero-infra public data apps.
 
 ---
 
-#### Phase 7 — AI Layer (~$5–10/month API, ~2 weeks)
+#### Phase 7 — AI Layer (~$5–10/month API, ~2 weeks) — bonus track
 
 **Goal:** Query the semantic layer with natural language via Snowflake Cortex Analyst and Claude API; explore MCP for direct semantic layer access from Claude Code.
 
@@ -476,14 +507,15 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 - Set a $10/month spend cap in Anthropic account settings before writing any API calls
 - Compare Snowflake Cortex Analyst vs Claude API over Cube
 - Cube has an MCP server — query the semantic layer directly from Claude Code terminal
+- **Added June 2026 — parallel sandbox exploration:** MotherDuck Dives lets an AI agent build live, shareable React visualizations over data in MotherDuck via MCP, in public preview since Feb 2026. Worth trying for fun against a throwaway snapshot of the mart layer — not a stack decision, since it requires data living in MotherDuck (reopens the third-engine question already closed for production purposes) and MotherDuck isn't free long-term.
 
 **Skills locked in:** AI-over-data patterns, text-to-metric vs text-to-SQL, semantic layer as AI context, API spend management, MCP orchestration.
 
 ---
 
-#### Phase 8 — CI/CD and Portfolio (~1 week)
+#### Phase 8 — CI/CD and Portfolio (~1 week) — CORE, pulled forward
 
-**Goal:** Implement slim CI with state-based selection; add MetricFlow validation; write a comprehensive README; record a walkthrough of the full stack end-to-end.
+**Goal:** Implement slim CI with state-based selection; add MetricFlow validation; write a comprehensive README; record a walkthrough of the full stack end-to-end. Pulled forward relative to earlier sequencing since it's cheap, high-leverage, and doesn't depend on bonus-track work finishing.
 
 **Key notes:**
 - Slim CI: `dbt build --select state:modified+` on PRs only
@@ -515,13 +547,25 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 **Active branch:** `main` (clean; `fix/relationships-test-deprecation` and `docs/update-uv-version` deleted locally after confirming merge)
 
-**Next actions:**
-1. Confirm `ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;` was actually run (discussed, not explicitly confirmed executed)
-2. Flip local `profiles.yml` default target to `dev_duck`; confirm `dbt build` still passes clean against DuckDB (Phase 3 wrap-up, carried into Phase 4 prep)
-3. Before writing any Phase 4 code: resolve the dlt/GitHub Actions tooling re-evaluation (compare against Snowflake Openflow, among others)
-4. Once tooling is settled, begin Phase 4 with the bronze layer design already decided (S3 + Iceberg, cataloged via Snowflake Open Catalog)
+**Next actions, superseded below — see "This session (June 2026)" for the current list.**
 
 **Decisions made this session not captured elsewhere:**
 - No new phase number for "DuckDB-first dev workflow" — it's a discipline applied within Phase 4, not a separate phase
 - Two-role default for day-to-day Snowsight use (`SYSADMIN` default, `ACCOUNTADMIN` for account-level only) — full four-role rotation judged as enterprise ceremony not worth it solo
 - Snowflake Optima Metadata (automatic pruning metadata for high-frequency query patterns) noted as existing but not relevant at current hobby-project query volume
+
+---
+
+**This session (June 2026) — roadmap restructure for job-search timeline:**
+- Resolved the dlt vs. Openflow pause from Phase 4: dlt confirmed, no longer blocking
+- Split the roadmap into a core/bonus track (see Scope Tracks, Part 1) — core collapses to dlt-straight-to-Snowflake (no bronze layer), minimal GitHub Actions orchestration, and an elevated Phase 6; bronze layer, orchestrator bake-off, and deep Snowflake platform exploration move to the bonus track
+- Decided the semantic layer phase outranks ingestion/orchestration depth in priority, since it's the project's most differentiating technical demonstration
+- Reconsidered Cube's role — its API-exposure model doesn't serve a "anyone self-serves a dashboard" goal; Lightdash and Metabase are now live candidates, decision deferred to Phase 6
+- New idea added: a public, zero-infra "how bad is this team" demo using Evidence's Universal SQL (DuckDB-WASM) over exported Parquet snapshots — genuinely cheap, could land earlier than the rest of Phase 6
+- Noted MotherDuck Dives (AI-agent-built live visualizations via MCP, public preview since Feb 2026) as a fun bonus-track parallel to the Phase 7 Cube-MCP plan — sandbox only, doesn't reopen the MotherDuck-as-production-engine question
+
+**Next actions (updated):**
+1. Confirm `ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;` was actually run (still outstanding)
+2. Flip local `profiles.yml` default target to `dev_duck`; confirm `dbt build` passes clean against DuckDB
+3. Begin slimmed Phase 4: dlt pipeline writing directly into `RAYS_ANALYTICS.RAW` — no tooling re-evaluation needed, no bronze layer this pass
+4. When Phase 6 starts: decide Lightdash vs. Metabase vs. keeping Cube+Evidence for the internal self-serve BI question
