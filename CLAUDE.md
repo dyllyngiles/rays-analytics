@@ -35,7 +35,8 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 - VS Code with extensions: dbt Power User, Python, GitLens, Claude Code
 - GitHub account connected via SSH key (Ed25519)
 - tealdeer installed for command reference (`tldr <command>`)
-- DBeaver installed — used for occasional data inspection only, not primary workflow
+- DBeaver installed but not actually used — adds friction for no benefit at this project's scale; DuckDB CLI is the preferred path for ad hoc local queries
+- DuckDB CLI installed via `brew install duckdb` — invoke as `duckdb <path>`. **Always use the absolute path** (`/Users/dyllyngiles/projects/rays-analytics/dev.duckdb`) — a relative path opens or silently creates a different, empty file depending on current working directory. This same class of bug has now bitten in three different tools (`dbt build` without `DUCKDB_PATH` set, the dlt pipeline before it was parameterized, and the CLI itself) — see Project Structure section for the general pattern.
 
 ---
 
@@ -136,6 +137,18 @@ Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs th
 **Public self-serve demo, added June 2026:** Evidence ships a DuckDB engine to the browser via WebAssembly (Universal SQL) — filters and dropdowns run live SQL client-side against Parquet snapshots, with no server round-trip. That means a static GitHub Pages site, built from exported mart/metrics Parquet files, can let any visitor interact with the data live in their own browser — no backend, no credentials exposed, no per-visitor cost. This is a separate use case from the Lightdash/Metabase self-serve BI decision below: it's for a public, zero-infra, anyone-with-a-browser experience, not an internal team tool. Perspective (FINOS) is the candidate if literal drag-and-drop pivoting matters more than Evidence's filter-driven interactivity — decision deferred until this gets built.
 
 **Self-serve BI tool decision, added June 2026, deferred to Phase 6:** Lightdash reads metrics/dimensions directly from dbt YAML and gives a genuine point-and-click explorer for non-technical users — closer to the "anyone can build their own dashboard" goal than Cube+Evidence ever was. The catch: standard self-hosting runs on Docker (Node + Postgres), which conflicts with the no-Docker stance — worth a deliberate call (reconsider Docker for this one component vs. Lightdash Cloud's trial vs. Metabase as the no-Docker alternative, which trades away dbt-native metric governance). Not yet decided.
+
+**dlt resource design for `games` — completed games only, no live/in-progress state (decided June 2026):** The MLB Stats API schedule endpoint returns every game for a season regardless of status — `Scheduled`, `In Progress`, `Final`, etc. The `games` resource filters to `Final`/`Completed Early` only before yielding, so unplayed or in-progress games never reach `raw.games`. This was a deliberate scope call, not a technical limitation: landing live game state would require loosening `not_null` tests on score columns, expanding `accepted_values` on `game_status`, and rethinking how `rays_win` behaves for a game with no result yet. None of that was judged worth it for the core path — the resource always re-pulls the full current season on every run, so a game picked up as `Final` for the first time merges in cleanly the moment it's actually decided, with no half-loaded intermediate state ever touching the table.
+
+**Why `games` doesn't use dlt's `incremental()` cursor (decided June 2026):** dlt's `dlt.sources.incremental()` helper is built for cursor-based filtering — "give me rows where `updated_at` > last-seen-value." The schedule endpoint doesn't have that shape: a 2022 game's result doesn't change, but the endpoint also doesn't expose a true modified-since cursor, and it returns the whole season every call regardless. The actual pattern used instead is full-season re-pull + `merge` write-disposition keyed on `game_pk` — correct for this data's small size and shape, not a missing feature. **This will not hold at Statcast scale** — see Phase 4 notes; pitch-level data has real cursor potential (game date) and re-pulling full history every run isn't viable at that volume.
+
+**dlt pipeline destination is parameterized, not hardcoded (decided June 2026):** `mlb_pipeline.py` takes `--destination duckdb|snowflake` as a CLI flag (default `duckdb`). The resource/source code is destination-agnostic by construction — only the `pipeline.run()` call's destination argument changes. This was chosen specifically so DuckDB can be refreshed freely and at zero cost (real, current data — not a stale fixture) while Snowflake compute is only spent when explicitly requested. CI's future DuckDB job and Snowflake job will call the same script with different flags, not different scripts.
+
+**dlt table ownership gotcha (hit and resolved June 2026):** dlt cannot retrofit its internal tracking columns (`_dlt_id`, `_dlt_load_id`) onto a table it didn't create — attempting to `ALTER TABLE ADD COLUMN ... NOT NULL/UNIQUE` on a pre-existing table fails (DuckDB: `Parser Error: Adding columns with constraints not yet supported`). Hit when `dev.duckdb`'s `raw.games` still held data from the old manual `load_mlb_data.py` script. Fix: any table dlt is meant to own must be created by dlt from a clean slate — drop the table (or the whole local file) and let the pipeline recreate it. **This is a known, not-yet-resolved blocker for the first `--destination snowflake` run** — `RAYS_ANALYTICS.RAW.GAMES` still holds the Phase 3 manual-CSV-stopgap data and will hit the identical error.
+
+**`dim_teams`/`dim_venues` deduplication — most-recent-name-wins (decided June 2026):** Both models originally deduped on `(id, name)` as a pair via `union`/`select distinct`. This broke the moment 2025–2026 data entered the table — team and venue names can change over time for the same numeric id (e.g. a team dropping a city name ahead of relocation; ballpark sponsorship renames), producing two rows for one id and failing the `unique` test on `team_id`/`venue_id`. Fixed by ranking rows per id by `game_date desc` (`row_number()` window function) and keeping only the most recent name. Chosen deliberately over two alternatives: always-earliest-name (rejected — shows stale branding) and full slowly-changing-dimension history (rejected for now — more correct but more work than the core path needs; revisit if a future phase actually needs "what was this called in 2022" as a queryable fact).
+
+
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
 
@@ -381,7 +394,11 @@ rays_analytics:
 
 ### CI Architecture Notes
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every PR to main.
+The GitHub Actions workflow (`.github/workflows/ci.yml`) currently has **one job**, triggered on `pull_request` to `main` only. It runs `dbt build` against DuckDB. It is currently broken — see Phase 4 wrap-up — because it still calls the now-deleted `load_mlb_data.py`.
+
+**Target architecture (designed, not yet built):** a second job, gated to run only on `push` to `main` (i.e., post-merge, not on every PR), running `dbt build` against real Snowflake using a dynamically-generated `profiles.yml` with the service user's key-pair credentials pulled from GitHub Secrets (`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_PRIVATE_KEY`, `SNOWFLAKE_USER`). DuckDB stays on every PR (fast, free, catches structural errors). This bounds Snowflake compute cost to "once per merged PR," not "once per push to an open PR" — a deliberate cost control. SQL dialect differences mean DuckDB passing doesn't guarantee Snowflake passing; that gap is accepted, not solved, by running Snowflake validation once at merge rather than DuckDB-only forever.
+
+Building this requires: (1) adding GitHub repo secrets for the service user's private key and account identifier, (2) a second job definition with a `push`-only trigger condition, (3) a Snowflake-flavored `profiles.yml` generation step parallel to the existing DuckDB one. Not yet started.
 
 **Actions pinning:** All actions are pinned to exact commit hashes, not floating version tags. The March 2025 tj-actions/changed-files compromise — which leaked secrets from thousands of repositories via a hijacked tag — is the canonical reason why. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -399,8 +416,6 @@ uv sync --locked
 Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
-
-**Dual-job architecture:** CI now runs two jobs. DuckDB runs on every PR (fast, free, catches structural errors — but SQL dialect differences mean DuckDB passing doesn't guarantee Snowflake passing). Snowflake only runs on merge to `main`, generating a `profiles.yml` dynamically using the service user's private key from a GitHub Secret — the key is written to a temp file during the run and referenced by path in the generated profile. Workload Identity Federation (Snowflake's preferred newer auth method) was researched and ruled out — unsupported in dbt-snowflake as of June 2026 — so key-pair auth is the deliberate, correct choice here, not a fallback.
 
 ---
 
@@ -434,8 +449,7 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 - dbt debug passing ✅
 - `relationships` test deprecation warning fixed — PR #14 ✅
 - UV version corrected to 0.11.17 in docs — PR #15 ✅
-- GitHub Actions CI updated — dual-job architecture: DuckDB job runs on every PR (fast, free, structural validation), Snowflake job runs only on merge to `main` (real warehouse validation) using dynamically-generated key-pair profile ✅
-- GitHub Secrets configured — `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_PRIVATE_KEY`; `SNOWFLAKE_USER` hardcoded (not sensitive) ✅
+- Dual-job CI architecture (DuckDB-every-PR / Snowflake-on-merge) **designed and documented, not yet implemented.** `ci.yml` on `main` currently has a single DuckDB job triggered on `pull_request` only — no Snowflake job, no GitHub Secrets configured yet. This is real, scoped work, not a doc gap — tracked as a Phase 4 wrap-up item below.
 - Workload Identity Federation researched and ruled out — unsupported in dbt-snowflake as of June 2026; key-pair auth confirmed correct ✅
 - `RAYS_ANALYTICS.RAW.GAMES` populated via one-time manual CSV stopgap (486 games) ✅
 - Full `dbt build` passing against real Snowflake data — models and all 44 tests ✅
@@ -447,26 +461,37 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ---
 
-#### Phase 4 — Ingestion (~1 week, slimmed for core path)
+#### Phase 4 — Ingestion (~1 week, slimmed for core path) — IN PROGRESS
 
 **Resolved June 2026:** dlt over Openflow — see Key Architectural Decisions. No longer a blocking pause.
 
 **Core goal:** Replace `load_mlb_data.py` with a proper dlt pipeline writing directly into `RAYS_ANALYTICS.RAW`; add Statcast data via pybaseball; build staging models over dlt raw output; implement incremental loading. **No bronze/Iceberg layer in this pass** — that work is rescoped to the bonus track (see Scope Tracks, Part 1).
 
+**Completed this session:**
+- Phase 3 wrap-up debt cleared: confirmed `DEFAULT_ROLE = SYSADMIN` set on service user; flipped local `profiles.yml` target to `dev_duck`; full `dbt build` passing clean against DuckDB ✅
+- `dlt==1.28.1` installed via `uv add "dlt[duckdb,snowflake]"` ✅
+- Feature branch `feature/dlt-games-pipeline` created; `load_mlb_data.py` removed via `git rm` ✅
+- `mlb_pipeline.py` built at repo root — `games` resource (merge write-disposition, `game_pk` primary key), `mlb_stats_api` source, destination-parameterized via `--destination duckdb|snowflake` CLI arg (defaults to `duckdb` — Snowflake compute only spent when explicitly requested) ✅
+- End-to-end DuckDB load verified: 729 completed games across 2022–2026 (2026 partial season, correctly growing run-over-run as games finish) ✅
+- `accepted_values` tests on `season` updated to include 2025/2026 in both `staging/schema.yml` and `marts/schema.yml` ✅
+- `dim_teams.sql` / `dim_venues.sql` fixed — see Key Architectural Decisions below ✅
+- Full `dbt build` passing clean against DuckDB with dlt-sourced data — 48/48 ✅
+
+**Known open items before this branch is mergeable:**
+- `ci.yml`'s DuckDB job still calls the deleted `load_mlb_data.py` — needs to call `mlb_pipeline.py --destination duckdb` instead
+- Snowflake `RAW.GAMES` still holds the Phase 3 manual-CSV-stopgap data, created outside dlt's lifecycle management. The first `--destination snowflake` run will hit the same table-ownership collision DuckDB hit (see Key Architectural Decisions, "dlt table ownership") — table needs to be dropped and let dlt recreate it
+- CI dual-job architecture (Snowflake-on-merge) not yet built — see CI Architecture Notes
+- Statcast/pybaseball resource not yet started
+
 **Key notes:**
-- Install dlt and Marimo with `uv add dlt marimo`
-- dlt lands raw data directly in Snowflake's `RAW` schema; add dbt sources YAML pointing at dlt's raw tables
-- Incremental loading requires a cursor column — understand dlt state management
-- Update season list to include 2025 and 2026; update `accepted_values` tests accordingly
-- Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond
-- Loading data into `RAYS_ANALYTICS.RAW.GAMES` is the first task of this phase — this replaces the manual CSV stopgap from Phase 3 entirely
-- As part of this phase, also flip `profiles.yml`'s default local target from `dev` (Snowflake) to `dev_duck`, and confirm a full `dbt build` still passes cleanly against DuckDB before building anything new on top of it — carried over from Phase 3 wrap-up, not yet done.
+- Incremental loading requires a cursor column — understand dlt state management. **Decided this session:** the `games` resource does NOT use `dlt.sources.incremental()` — see Key Architectural Decisions, "Why games doesn't use dlt's incremental cursor." Statcast will need the real cursor pattern; `games` doesn't fit it.
+- Deliberately introduce a schema change and observe how dlt and dbt source freshness tests respond — not yet done
 
 **Bonus-track note (when revisited):** S3 + Iceberg + Snowflake Open Catalog bronze layer — dlt writes once to S3 as Iceberg tables, Snowflake and DuckDB both read from that bronze location as separate engines. One-time setup: an `ORGADMIN`-created Open Catalog account, an S3 bucket in us-east-2, IAM credentials scoped to that bucket. Single-writer discipline: only Open Catalog should ever write to the bronze S3 location.
 
-**Skills locked in (core):** Python-based ingestion, raw/staging layer pattern, incremental loading, schema drift handling, source freshness testing, exploratory data analysis with Marimo.
+**Skills locked in (core):** Python-based ingestion, dlt resource/source/pipeline model, raw/staging layer pattern, merge write-disposition vs. manual upsert SQL, destination-parameterized pipeline design, schema drift handling, source freshness testing.
 
-**Skills locked in (bonus, when revisited):** Iceberg table format and REST catalog mechanics, S3/IAM setup, storage-layer portability (multiple engines reading one physical dataset).
+**Skills locked in (bonus, when revisited):** Iceberg table format and REST catalog mechanics, S3/IAM setup, storage-layer portability (multiple engines reading one physical dataset), incremental loading with a real cursor column (deferred to Statcast).
 
 ---
 
@@ -556,16 +581,32 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ---
 
-**This session (June 2026) — roadmap restructure for job-search timeline:**
-- Resolved the dlt vs. Openflow pause from Phase 4: dlt confirmed, no longer blocking
-- Split the roadmap into a core/bonus track (see Scope Tracks, Part 1) — core collapses to dlt-straight-to-Snowflake (no bronze layer), minimal GitHub Actions orchestration, and an elevated Phase 6; bronze layer, orchestrator bake-off, and deep Snowflake platform exploration move to the bonus track
-- Decided the semantic layer phase outranks ingestion/orchestration depth in priority, since it's the project's most differentiating technical demonstration
-- Reconsidered Cube's role — its API-exposure model doesn't serve a "anyone self-serves a dashboard" goal; Lightdash and Metabase are now live candidates, decision deferred to Phase 6
-- New idea added: a public, zero-infra "how bad is this team" demo using Evidence's Universal SQL (DuckDB-WASM) over exported Parquet snapshots — genuinely cheap, could land earlier than the rest of Phase 6
-- Noted MotherDuck Dives (AI-agent-built live visualizations via MCP, public preview since Feb 2026) as a fun bonus-track parallel to the Phase 7 Cube-MCP plan — sandbox only, doesn't reopen the MotherDuck-as-production-engine question
+**Session (June 2026) — Phase 4 dlt pipeline, `games` resource built end-to-end:**
+- Cleared remaining Phase 3 wrap-up debt: confirmed `DEFAULT_ROLE = SYSADMIN`; flipped local `profiles.yml` target to `dev_duck`; full `dbt build` verified passing clean against DuckDB (hit and fixed the classic relative-`DUCKDB_PATH` decoy-file bug along the way — see Local Environment notes)
+- Installed `dlt==1.28.1` with `[duckdb,snowflake]` extras; confirmed via `pyproject.toml`, not just a clean install message
+- Created `feature/dlt-games-pipeline`; removed `load_mlb_data.py` via `git rm`; built `mlb_pipeline.py` from scratch — `games` resource (merge write-disposition, `game_pk` primary key, completed-games-only filter), `mlb_stats_api` source, `--destination duckdb|snowflake` CLI flag (default `duckdb`)
+- Hit and resolved the dlt table-ownership collision (pre-existing `raw.games` table from the old manual loader couldn't accept dlt's tracking columns) — deleted `dev.duckdb`, let dlt recreate the table cleanly
+- End-to-end verified: 729 completed games loaded across 2022–2026, confirmed live by re-running minutes apart and watching the 2026 count tick up as real games finished
+- Hit, diagnosed, and fixed two real test failures the larger dataset surfaced: `accepted_values` on `season` (needed 2025/2026 added — mechanical fix), and `unique` failures on `dim_teams`/`dim_venues` (real cause — team/venue renames over time; user independently verified the Athletics name change in `stg_games` directly via DuckDB CLI before accepting the fix)
+- Full `dbt build` passing 48/48 against dlt-sourced DuckDB data
+- Installed DuckDB CLI (`brew install duckdb`) as the preferred path for ad hoc local queries — user doesn't use DBeaver day-to-day despite it being installed
+- **Found and corrected a real documentation/reality gap:** CLAUDE.md's Phase 3 checklist and CI Architecture Notes both claimed a dual-job (DuckDB + Snowflake) CI setup with GitHub Secrets already configured. Actual `ci.yml` on `main` only has a single DuckDB-only job. Corrected throughout this doc — see CI Architecture Notes and Phase 4.
 
-**Next actions (updated):**
-1. Confirm `ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;` was actually run (still outstanding)
-2. Flip local `profiles.yml` default target to `dev_duck`; confirm `dbt build` passes clean against DuckDB
-3. Begin slimmed Phase 4: dlt pipeline writing directly into `RAYS_ANALYTICS.RAW` — no tooling re-evaluation needed, no bronze layer this pass
+**Decisions made this session, not fully captured in Part 1 prose:**
+- `games` resource deliberately excludes Scheduled/In Progress games — completed-games-only is the chosen scope for the core path, not a placeholder
+- `games` does not use `dlt.sources.incremental()` — full-season re-pull + merge fits this source's shape better; the real incremental cursor pattern is deferred to Statcast, where it'll actually be needed
+- dlt pipeline destination is a CLI flag, not hardcoded, specifically so DuckDB can be refreshed freely (real data, zero cost) independent of Snowflake spend
+- `dim_teams`/`dim_venues` use most-recent-name-wins (ranked by `game_date desc`) rather than full SCD-style history tracking — simplest correct option for the core path, revisit only if a future phase needs historical name lookups
+
+**Active branch:** `feature/dlt-games-pipeline` — NOT yet merged. Three known blockers before it's mergeable:
+1. `ci.yml`'s DuckDB job still calls deleted `load_mlb_data.py` — needs to call `mlb_pipeline.py --destination duckdb`
+2. Snowflake `RAW.GAMES` still has the Phase 3 manual-CSV-stopgap table; first `--destination snowflake` run will hit the same table-ownership collision DuckDB hit — needs the table dropped first
+3. CI's Snowflake-on-merge job doesn't exist yet (secrets + second job definition + push-trigger) — currently scoped as its own follow-up session, not a quick add-on
+
+**Next actions:**
+1. Fix `ci.yml`'s DuckDB job to call `mlb_pipeline.py --destination duckdb` instead of the deleted script — small, mechanical, unblocks the PR
+2. Resolve the Snowflake `RAW.GAMES` collision and run `mlb_pipeline.py --destination snowflake` for real, end to end
+3. Build the Snowflake CI job: GitHub Secrets for service-user credentials, second job gated to `push`-on-`main` only, Snowflake-flavored dynamic `profiles.yml` generation
+4. Once the above three are done, open the PR for `feature/dlt-games-pipeline` and merge
+5. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern, since `games`' full-repull approach won't fit this data's volume
 4. When Phase 6 starts: decide Lightdash vs. Metabase vs. keeping Cube+Evidence for the internal self-serve BI question
