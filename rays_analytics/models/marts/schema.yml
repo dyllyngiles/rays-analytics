@@ -5,7 +5,7 @@ models:
     description: >
       Dimension table containing one row per MLB team that appears in the Rays schedule.
       Derived from stg_games by unioning home and away teams. Covers all opponents
-      faced by the Rays across the 2022-2024 seasons plus the Rays themselves.
+      faced by the Rays across the 2022-present seasons plus the Rays themselves.
     columns:
       - name: team_id
         description: MLB team identifier. Natural key from MLB Stats API.
@@ -36,7 +36,7 @@ models:
 
   - name: fct_games
     description: >
-      Fact table containing one row per Rays regular season game, 2022-2024.
+      Fact table containing one row per Rays regular season game, 2022-present.
       Grain is one game. All measures are from the Rays perspective — runs scored,
       runs allowed, win/loss. Joins to dim_venues for referential integrity.
     columns:
