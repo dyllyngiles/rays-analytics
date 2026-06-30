@@ -48,12 +48,12 @@ jobs:
             target: dev
           PROFILE
 
-      # 7. Activate repo root venv and run the loader script
+      # 7. Activate repo root venv and run the pipeline script
       #    Creates and populates dev.duckdb that dbt models depend on
       - name: Load MLB data into DuckDB
         run: |
           source .venv/bin/activate
-          python load_mlb_data.py
+          python mlb_pipeline.py --destination duckdb
         env:
           DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
 
