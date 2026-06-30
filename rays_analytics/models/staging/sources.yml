@@ -6,7 +6,7 @@ sources:
     schema: raw
     tables:
       - name: games
-        description: Raw game schedule and results for Tampa Bay Rays, 2022-2024
+        description: Raw game schedule and results for Tampa Bay Rays, 2022-present
         columns:
           - name: game_pk
             description: Unique MLB game identifier
