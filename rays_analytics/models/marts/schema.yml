@@ -62,7 +62,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: [2022, 2023, 2024]
+                values: [2022, 2023, 2024, 2025, 2026]
 
       - name: game_location
         description: >
