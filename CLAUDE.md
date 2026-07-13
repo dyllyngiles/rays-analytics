@@ -62,7 +62,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 **DuckDB path is always a relative path** (`dev.duckdb`) from repo root, never hardcoded absolute. The `DUCKDB_PATH` environment variable overrides it in CI.
 
-**UV does not load `.env` files automatically.** Use `uv run --env-file .env your_script.py` to load them explicitly. For scripts that need environment variables at import time (dlt pipelines, Claude API calls), use python-dotenv: `uv add python-dotenv`, then `from dotenv import load_dotenv; load_dotenv()` at the top of the script.
+**UV does not load `.env` files automatically.** Use `uv run --env-file .env <command>` to load them explicitly — this works for any command run inside the venv, not just Python scripts (e.g. `uv run --env-file .env dbt build`, `uv run --env-file .env python mlb_pipeline.py`). For scripts that need environment variables at import time (dlt pipelines, Claude API calls), use python-dotenv: `uv add python-dotenv`, then `from dotenv import load_dotenv; load_dotenv()` at the top of the script.
 
 ---
 
@@ -148,7 +148,7 @@ Self-hosted Polaris isn't rejected, just deferred — since Open Catalog runs th
 
 **`dim_teams`/`dim_venues` deduplication — most-recent-name-wins (decided June 2026):** Both models originally deduped on `(id, name)` as a pair via `union`/`select distinct`. This broke the moment 2025–2026 data entered the table — team and venue names can change over time for the same numeric id (e.g. a team dropping a city name ahead of relocation; ballpark sponsorship renames), producing two rows for one id and failing the `unique` test on `team_id`/`venue_id`. Fixed by ranking rows per id by `game_date desc` (`row_number()` window function) and keeping only the most recent name. Chosen deliberately over two alternatives: always-earliest-name (rejected — shows stale branding) and full slowly-changing-dimension history (rejected for now — more correct but more work than the core path needs; revisit if a future phase actually needs "what was this called in 2022" as a queryable fact).
 
-
+**Secrets consolidation — single `.env` shared by dbt and dlt, no `.dlt/secrets.toml` (decided July 2026):** The first real `--destination snowflake` run exposed a gap: dlt keeps its own credential store, entirely separate from dbt's `~/.dbt/profiles.yml`, even though both point at the exact same Snowflake account and service user. The naive fix was a `.dlt/secrets.toml` — a second, tool-specific secrets file duplicating values (account identifier, service user, key path, warehouse, role, database) already sitting in `profiles.yml`. Instead, both tools now read from one gitignored `.env` at repo root: dlt via its native `DESTINATION__SNOWFLAKE__CREDENTIALS__*` environment variable convention, and `profiles.yml` via dbt's `env_var()` Jinja function pointed at those exact same variable names (see Current `profiles.yml` structure below). One canonical value per secret, referenced from two places instead of duplicated in two files. GitHub Secrets for CI remain a separate, unavoidable third location — a CI runner can't read a local, gitignored `.env` — so this consolidation is scoped to local dev only and doesn't change the Phase 4 CI blocker. Invocation pattern: `uv run --env-file .env <command>`, which loads the file identically for Python scripts and dbt commands.
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
 
@@ -253,16 +253,18 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 ```
 `ACCOUNTADMIN` is reserved for genuinely account-level tasks only: resource monitors, billing, and rare service-account/user management. Full four-role rotation (`ACCOUNTADMIN`/`SECURITYADMIN`/`USERADMIN`/`SYSADMIN`) is enterprise ceremony that isn't worth it for a one-person project — two roles is the right-sized version here.
 
-**The gotcha (bit twice in Phase 3):** anything created through the Snowsight UI under your personal session is owned by whatever role that session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access — Snowflake's role hierarchy doesn't flow downward to it. This surfaced as two different error messages for two different object types:
+**The gotcha (bit three times now — twice in Phase 3, once in Phase 4):** anything created through the Snowsight UI under your personal session is owned by whatever role that session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access — Snowflake's role hierarchy doesn't flow downward to it. This surfaced as three different error messages for three different object types:
 - **Table** (`RAW.GAMES`, loaded via the Catalog UI): `SQL compilation error: Object ... does not exist or not authorized` — Snowflake intentionally won't confirm whether an unauthorized role's target even exists.
 - **Warehouse** (`COMPUTE_WH`, owned by `ACCOUNTADMIN`): `No active warehouse selected in the current session` — the dbt-snowflake connector passes `warehouse:` as a connection parameter (an implicit `USE WAREHOUSE`); if the role lacks `USAGE` on it, the connector fails to set it *silently* rather than erroring at connect time. The error only surfaces later, when a query actually needs compute (which is also why a view model succeeded — `CREATE VIEW` is metadata-only — while table models failed immediately after).
+- **Schema** (`RAW`, hit in Phase 4 when dlt tried to recreate `GAMES` from scratch after the old table was dropped): `SQL access control error: Insufficient privileges to operate on schema 'RAW'. Your primary role SYSADMIN must have CREATE TABLE granted on SCHEMA RAYS_ANALYTICS.RAW.` A table-level `SELECT` grant doesn't imply schema-level `CREATE TABLE` — reading an existing table and originating a new one in that schema are separate privileges. This one only surfaced once the old `ACCOUNTADMIN`-owned table was gone, since nothing had ever needed to *create* a table in `RAW` before.
 
 **Fix, either case:** grant the missing privilege explicitly, run as the object's owning role:
 ```sql
 GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
 GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
+GRANT CREATE TABLE ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SYSADMIN;
 ```
-Better long-term fix: switch the Snowsight role selector to `SYSADMIN` *before* doing any manual UI work (loading data, creating warehouses), so objects are owned by the right role from creation instead of needing retroactive grants.
+Better long-term fix: switch the Snowsight role selector to `SYSADMIN` *before* doing any manual UI work (loading data, creating warehouses), so objects are owned by the right role from creation instead of needing retroactive grants. One upside of the schema-level grant specifically: `SYSADMIN` now owns whatever it creates in `RAW` going forward, so future table recreations in that schema are correctly owned from the moment of creation — no more retroactive grants needed there.
 
 ---
 
@@ -307,12 +309,12 @@ rays_analytics:
   outputs:
     dev:
       type: snowflake
-      account: <account_identifier>         # regional format: locator.region.aws
-      user: DBT_SERVICE_USER
-      private_key_path: ~/.ssh/dbt_service_user_rsa_key_p8.pem
-      role: SYSADMIN
-      database: RAYS_ANALYTICS
-      warehouse: COMPUTE_WH
+      account: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__HOST') }}"
+      user: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__USERNAME') }}"
+      private_key_path: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__PRIVATE_KEY_PATH') }}"
+      role: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__ROLE') }}"
+      database: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__DATABASE') }}"
+      warehouse: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__WAREHOUSE') }}"
       schema: DEV
       threads: 4
     dev_duck:
@@ -320,6 +322,8 @@ rays_analytics:
       path: "{{ env_var('DUCKDB_PATH', 'dev.duckdb') }}"
       threads: 4
 ```
+
+As of July 2026, the Snowflake credential fields are all `env_var()` calls rather than hardcoded values, pulled from a single gitignored `.env` at repo root that dlt also reads natively (see Key Architectural Decisions, "Secrets consolidation"). `schema: DEV` stays hardcoded deliberately — it's dbt-only config, not a credential shared with any other tool, so it never belonged in the consolidation.
 
 ---
 
@@ -330,8 +334,9 @@ rays_analytics:
   .venv/                            ← virtual environment (repo root, NOT in rays_analytics/)
   pyproject.toml                    ← project dependencies
   uv.lock                           ← pinned transitive dependency versions
-  load_mlb_data.py                  ← MLB Stats API loader
+  mlb_pipeline.py                   ← dlt pipeline, MLB Stats API → DuckDB/Snowflake (--destination flag)
   dev.duckdb                        ← local DuckDB file (gitignored)
+  .env                              ← Snowflake credentials shared by dbt + dlt (gitignored, never committed)
   publish_docs.sh                   ← publishes dbt docs to GitHub Pages
   README.md                         ← project overview and local setup
   CLAUDE.md                         ← Claude Code context
@@ -357,11 +362,11 @@ rays_analytics:
 ### Data Model
 
 - **Source:** MLB Stats API (no auth required)
-- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake — populated via a one-time manual CSV export/load from DuckDB (Phase 3 stopgap, run through Catalog → Database Explorer's load wizard). **This is not a real pipeline** — it exists only to unblock testing `dbt build` against Snowflake. Will be replaced entirely by the Phase 4 dlt pipeline.
+- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake — populated by the real `mlb_pipeline.py` dlt pipeline (`--destination snowflake`), owned by `SYSADMIN`. The Phase 3 manual-CSV-stopgap table has been fully retired (dropped and recreated by dlt in July 2026).
 - **Rays team ID:** 139
-- **Seasons loaded:** 2022, 2023, 2024 (486 games)
+- **Seasons loaded:** 2022–2026 (~740 completed games as of the last real Snowflake load — 162 each for 2022–2025, 92 for the still-in-progress 2026 season; this count grows run-over-run as 2026 games finish)
 - **Star schema:** stg_games → dim_teams, dim_venues, fct_games
-- **44 tests** — not_null, unique, accepted_values, relationships
+- **48 tests** — not_null, unique, accepted_values, relationships
 
 **Resolved:** the `MissingArgumentsPropertyInGenericTestDeprecation` warning on the `relationships` test in `models/marts/schema.yml` was fixed in PR #14 (nested arguments under an `arguments:` property, matching the existing `accepted_values` pattern).
 
@@ -394,7 +399,7 @@ rays_analytics:
 
 ### CI Architecture Notes
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) currently has **one job**, triggered on `pull_request` to `main` only. It runs `dbt build` against DuckDB. It is currently broken — see Phase 4 wrap-up — because it still calls the now-deleted `load_mlb_data.py`.
+The GitHub Actions workflow (`.github/workflows/ci.yml`) currently has **one job**, triggered on `pull_request` to `main` only. It runs `dbt build` against DuckDB, first calling `mlb_pipeline.py --destination duckdb` to populate the local database. This job works correctly as of `main` — an earlier version of this doc claimed it still called the deleted `load_mlb_data.py`; that was stale documentation that never got updated after `feature/dlt-games-pipeline` merged, not the actual state of the repo.
 
 **Target architecture (designed, not yet built):** a second job, gated to run only on `push` to `main` (i.e., post-merge, not on every PR), running `dbt build` against real Snowflake using a dynamically-generated `profiles.yml` with the service user's key-pair credentials pulled from GitHub Secrets (`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_PRIVATE_KEY`, `SNOWFLAKE_USER`). DuckDB stays on every PR (fast, free, catches structural errors). This bounds Snowflake compute cost to "once per merged PR," not "once per push to an open PR" — a deliberate cost control. SQL dialect differences mean DuckDB passing doesn't guarantee Snowflake passing; that gap is accepted, not solved, by running Snowflake validation once at merge rather than DuckDB-only forever.
 
@@ -477,10 +482,14 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 - `dim_teams.sql` / `dim_venues.sql` fixed — see Key Architectural Decisions below ✅
 - Full `dbt build` passing clean against DuckDB with dlt-sourced data — 48/48 ✅
 
-**Known open items before this branch is mergeable:**
-- `ci.yml`'s DuckDB job still calls the deleted `load_mlb_data.py` — needs to call `mlb_pipeline.py --destination duckdb` instead
-- Snowflake `RAW.GAMES` still holds the Phase 3 manual-CSV-stopgap data, created outside dlt's lifecycle management. The first `--destination snowflake` run will hit the same table-ownership collision DuckDB hit (see Key Architectural Decisions, "dlt table ownership") — table needs to be dropped and let dlt recreate it
-- CI dual-job architecture (Snowflake-on-merge) not yet built — see CI Architecture Notes
+**Completed since (July 2026 session):**
+- `feature/dlt-games-pipeline` confirmed merged to `main` — the `ci.yml` fix and the real Snowflake load both landed; see corrections in CI Architecture Notes and Data Model
+- Real `--destination snowflake` run succeeded: ~740 completed games loaded into `RAYS_ANALYTICS.RAW.GAMES`, correctly owned by `SYSADMIN`
+- Hit and resolved the third RBAC ownership gotcha (schema-level `CREATE TABLE`) — see Role Hierarchy & Privilege Notes
+- Secrets consolidated: single `.env` now shared by dbt and dlt for Snowflake credentials, replacing the need for a separate `.dlt/secrets.toml` — see Key Architectural Decisions
+
+**Known open items:**
+- CI dual-job architecture (Snowflake-on-merge) not yet built — see CI Architecture Notes. This is the last remaining Phase 4 blocker.
 - Statcast/pybaseball resource not yet started
 
 **Key notes:**
@@ -598,15 +607,27 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 - dlt pipeline destination is a CLI flag, not hardcoded, specifically so DuckDB can be refreshed freely (real data, zero cost) independent of Snowflake spend
 - `dim_teams`/`dim_venues` use most-recent-name-wins (ranked by `game_date desc`) rather than full SCD-style history tracking — simplest correct option for the core path, revisit only if a future phase needs historical name lookups
 
-**Active branch:** `feature/dlt-games-pipeline` — NOT yet merged. Three known blockers before it's mergeable:
-1. `ci.yml`'s DuckDB job still calls deleted `load_mlb_data.py` — needs to call `mlb_pipeline.py --destination duckdb`
-2. Snowflake `RAW.GAMES` still has the Phase 3 manual-CSV-stopgap table; first `--destination snowflake` run will hit the same table-ownership collision DuckDB hit — needs the table dropped first
-3. CI's Snowflake-on-merge job doesn't exist yet (secrets + second job definition + push-trigger) — currently scoped as its own follow-up session, not a quick add-on
+**Active branch (as of that session):** `feature/dlt-games-pipeline` — since confirmed merged to `main` (see the July 2026 session below). Three known blockers at the time:
+1. `ci.yml`'s DuckDB job still calls deleted `load_mlb_data.py` — needs to call `mlb_pipeline.py --destination duckdb` — **resolved before merge**
+2. Snowflake `RAW.GAMES` still has the Phase 3 manual-CSV-stopgap table; first `--destination snowflake` run will hit the same table-ownership collision DuckDB hit — needs the table dropped first — **resolved in the July 2026 session below**
+3. CI's Snowflake-on-merge job doesn't exist yet (secrets + second job definition + push-trigger) — currently scoped as its own follow-up session, not a quick add-on — **still open, see below**
+
+**Next actions, superseded below — see "Session (July 2026)" for the current list.**
+
+When Phase 6 starts: decide Lightdash vs. Metabase vs. keeping Cube+Evidence for the internal self-serve BI question.
+
+---
+
+**Session (July 2026) — Real Snowflake load, secrets consolidation, third RBAC gotcha:**
+- Confirmed `feature/dlt-games-pipeline` was merged to `main` at some point after the last documented session — `ci.yml` already correctly calls `mlb_pipeline.py --destination duckdb`, and `mlb_pipeline.py` exists on `main`. Blocker #1 above was already resolved; this doc's "Known open items" list just hadn't been updated to reflect it.
+- Dropped the Phase 3 manual-CSV-stopgap `RAYS_ANALYTICS.RAW.GAMES` table (owned by `ACCOUNTADMIN`) to let dlt recreate it cleanly, owned by `SYSADMIN` this time
+- Hit the Snowflake credentials gap for dlt (a separate config store from dbt's `profiles.yml`). Instead of adding a `.dlt/secrets.toml`, consolidated to a single `.env` at repo root, read natively by both dlt (`DESTINATION__SNOWFLAKE__CREDENTIALS__*` env vars) and dbt (`profiles.yml` via `env_var()`) — see Key Architectural Decisions
+- Hit and resolved the third instance of the `ACCOUNTADMIN`/`SYSADMIN` ownership gotcha, this time at the schema level (missing `CREATE TABLE` privilege on `SCHEMA RAW`) — see Role Hierarchy & Privilege Notes
+- Real `--destination snowflake` run succeeded: ~740 completed games loaded into `RAYS_ANALYTICS.RAW.GAMES`, verified via `INFORMATION_SCHEMA.TABLES` (owner now `SYSADMIN`, row count and season range confirmed)
+
+**Active branch:** `chore/consolidate-secrets-env` — not yet merged. Both the `.env` file and the `profiles.yml` edit live outside the repo (gitignored / outside version control by design), so this branch's only actual diff is this CLAUDE.md update.
 
 **Next actions:**
-1. Fix `ci.yml`'s DuckDB job to call `mlb_pipeline.py --destination duckdb` instead of the deleted script — small, mechanical, unblocks the PR
-2. Resolve the Snowflake `RAW.GAMES` collision and run `mlb_pipeline.py --destination snowflake` for real, end to end
-3. Build the Snowflake CI job: GitHub Secrets for service-user credentials, second job gated to `push`-on-`main` only, Snowflake-flavored dynamic `profiles.yml` generation
-4. Once the above three are done, open the PR for `feature/dlt-games-pipeline` and merge
-5. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern, since `games`' full-repull approach won't fit this data's volume
-4. When Phase 6 starts: decide Lightdash vs. Metabase vs. keeping Cube+Evidence for the internal self-serve BI question
+1. Commit this CLAUDE.md update and merge `chore/consolidate-secrets-env`
+2. Build the Snowflake-on-merge CI job — GitHub Secrets, a `push`-gated second job, dynamic Snowflake `profiles.yml` generation in CI (the one remaining Phase 4 blocker — see CI Architecture Notes)
+3. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern, since `games`' full-repull approach won't fit that data's volume
