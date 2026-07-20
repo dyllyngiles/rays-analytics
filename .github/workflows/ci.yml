@@ -4,10 +4,14 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   dbt-build:
     name: Load data and run dbt build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
@@ -59,6 +63,67 @@ jobs:
 
       # 8. Activate venv from one level up (../) since we're inside rays_analytics/
       #    then run dbt build — compiles models, materializes them, runs all tests
+      - name: Run dbt build
+        run: |
+          source ../.venv/bin/activate
+          dbt build
+        working-directory: rays_analytics
+
+  dbt-build-snowflake:
+    name: Run dbt build against Snowflake
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the code on main
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # 2. Install UV — pinned to exact version for supply chain security
+      #    Hash corresponds to v8.1.0 of setup-uv
+      - name: Install UV
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.17"
+          python-version: "3.12"
+
+      # 3. Create virtual environment at repo root and install dependencies
+      #    No working-directory here — venv must live at repo root to match
+      #    local setup and be accessible to both the loader and dbt
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # 4. Write the private key to a runner temp file — never echoed or logged
+      - name: Write Snowflake private key
+        run: echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > "$RUNNER_TEMP/ci_key.pem"
+             chmod 600 "$RUNNER_TEMP/ci_key.pem"
+
+      # 5. Generate profiles.yml in the default ~/.dbt/ location
+      #    CI has no ~/.dbt/ directory — we create it and write the file
+      - name: Generate profiles.yml
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << PROFILE
+          rays_analytics:
+            outputs:
+              dev:
+                type: snowflake
+                account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+                user: ${{ secrets.SNOWFLAKE_USER }}
+                private_key_path: $RUNNER_TEMP/ci_key.pem
+                role: SYSADMIN
+                database: RAYS_ANALYTICS
+                warehouse: COMPUTE_WH
+                schema: PROD
+                threads: 4
+            target: dev
+          PROFILE
+
+      # 6. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then run dbt build — compiles models, materializes them, runs all tests
+      #    against real Snowflake. Assumes RAW.GAMES is already current from
+      #    regular pipeline runs — this is a code-correctness gate, not a
+      #    data-freshness check.
       - name: Run dbt build
         run: |
           source ../.venv/bin/activate
