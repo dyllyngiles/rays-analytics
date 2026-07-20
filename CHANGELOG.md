@@ -75,7 +75,7 @@ The `MissingArgumentsPropertyInGenericTestDeprecation` warning on the `relations
 - `relationships` test deprecation warning fixed — PR #14 ✅
 - UV version corrected to 0.11.17 in docs — PR #15 ✅
 - Dual-job CI architecture (DuckDB-every-PR / Snowflake-on-merge) designed and documented, not yet implemented. `ci.yml` on `main` currently has a single DuckDB job triggered on `pull_request` only — no Snowflake job, no GitHub Secrets configured yet. This is real, scoped work, not a doc gap — tracked as a Phase 4 wrap-up item.
-- Workload Identity Federation researched and ruled out — unsupported in dbt-snowflake as of June 2026; key-pair auth confirmed correct ✅ **[Superseded July 2026 — dbt-snowflake gained WIF support via a PR merged May 20, 2026; the Snowflake-on-merge CI job now adopts WIF over key-pair-in-Secrets. See Workload Identity Federation (WIF) Notes / CI Architecture Notes in CLAUDE.md]**
+- Workload Identity Federation researched and ruled out — unsupported in dbt-snowflake as of June 2026; key-pair auth confirmed correct ✅ **[Revised July 2026, then reverted later in July 2026 — a mid-July session incorrectly believed `dbt-snowflake` had gained WIF support via a PR merged May 20, 2026, and the CI job briefly planned to adopt WIF; a later-July session found `dbt-labs/dbt-adapters` PR #1316 is still open/unmerged, no `dbt-snowflake` release has WIF support, and reversed the plan back to key-pair. This June 2026 finding was correct all along. See Snowflake CI Auth Notes in CLAUDE.md.]**
 - `RAYS_ANALYTICS.RAW.GAMES` populated via one-time manual CSV stopgap (486 games) ✅
 - Full `dbt build` passing against real Snowflake data — models and all 44 tests ✅
 - Snowflake privilege/RBAC gotcha hit and resolved twice (table + warehouse ownership) — see Role Hierarchy notes ✅
@@ -197,3 +197,63 @@ When Phase 6 starts: decide Lightdash vs. Metabase vs. keeping Cube+Evidence for
 
 **Session (July 2026) — Split CLAUDE.md into current-state doc + this CHANGELOG.md:**
 - CLAUDE.md had grown to ~75k characters, past Claude Code's 40k-char limit, mixing current-state reference with session-by-session narrative history. Split per `scratch/claude-md-split-instructions.md`: this CHANGELOG.md now holds the full session log, extended architectural-decision rationale, the full RBAC ownership-gotcha narrative, the full Bronze Layer/Iceberg Catalog section, and the Phase 3/4 "completed this session" bullet lists. CLAUDE.md keeps current-state/operational content, the full WIF reasoning and setup (still actively relevant — `ci.yml` work isn't done), and a short "Current Status" section pointing here for history.
+
+---
+
+**Session (July 2026) — WIF→key-pair reversal, `.env`/`--project-dir` structural fix, Snowflake CI job:**
+- Before writing the `ci.yml` Snowflake job planned in the prior session, re-verified the WIF prerequisite instead of taking the earlier research at face value. The earlier claim — "`dbt-snowflake` gained WIF support via a PR merged May 20, 2026" — didn't hold up: `dbt-labs/dbt-adapters` PR #1316 ("Adding support for Snowflake Workload Identity Federation") is still **open**, open since September 2025, blocked on a maintainer requirement for ongoing integration-test infrastructure before merge. No stable or pre-release `dbt-snowflake` version ships WIF support as of this session. The dbt-snowflake v1.12.0 milestone tracker shows the work at 45% complete.
+- **Decided: reversed the CI auth plan from WIF back to key-pair.** This removes the asymmetry the earlier plan had accepted (dbt secretless via WIF, dlt still needing key-pair) — both tools now use key-pair, matching. Full current-state reasoning: see Snowflake CI Auth Notes in CLAUDE.md (renamed from Workload Identity Federation (WIF) Notes).
+- Generated and registered a new key-pair for `RAYS_ANALYTICS_CI_SERVICE` (`RSA_PUBLIC_KEY` had never been set — the account was created straight for WIF and had no key material). Left the `WIF_GITHUB_ONLY` authentication policy attached rather than removing it — its `ALLOWED_PROVIDERS = (OIDC)` restricts *which* IdP a workload-identity login could use, but doesn't block key-pair logins, since `AUTHENTICATION_METHODS` on the policy is `[ALL]`. Verified via `dbt debug --target ci_test` against a temporary `ci_test` target in `~/.dbt/profiles.yml`, then removed that target once confirmed.
+- Separately, hit and fixed a structural gap while wiring up local/CI parity: dbt v1.12's native `.env` autoload is CWD-bound with no `--project-dir` support, and this repo's `.env` lives at repo root while `dbt_project.yml` lives in `rays_analytics/` — the native autoload was never going to fit this layout even after upgrading. Fixed with a repo-root `Makefile` (`make setup`, `make dbt-build`, `make dbt-debug-ci`) wrapping `uv run --env-file .env dbt ... --project-dir rays_analytics`, replacing the `cd rays_analytics` convention. See Workflow Conventions in CLAUDE.md.
+- Added the second `ci.yml` job (`push`-to-`main`, key-pair auth, no `id-token: write` since key-pair doesn't use OIDC) — closes the last open Phase 4 blocker. See CI Architecture Notes in CLAUDE.md.
+- Flagged a follow-up, not done this session: the CI job runs under `SYSADMIN`, broader than it needs. A scoped `CI_DEPLOYER` role is a known next step, deprioritized behind the README/walkthrough and a baseball-question mart.
+
+**Preserved for history — the original WIF `CREATE USER`/OIDC Snowsight setup SQL** (removed from CLAUDE.md's now-renamed Snowflake CI Auth Notes section, since the account no longer authenticates this way, but the account-side config itself was left in place dormant rather than torn down):
+```sql
+USE ROLE SECURITYADMIN;
+
+CREATE USER RAYS_ANALYTICS_CI_SERVICE
+  TYPE = SERVICE
+  WORKLOAD_IDENTITY = (
+    TYPE = OIDC
+    ISSUER = 'https://token.actions.githubusercontent.com'
+    SUBJECT = 'repo:dyllyngiles/rays-analytics:ref:refs/heads/main'
+  )
+  DEFAULT_ROLE = SYSADMIN;
+
+GRANT ROLE SYSADMIN TO USER RAYS_ANALYTICS_CI_SERVICE;
+
+-- Authentication policy requires CREATE AUTHENTICATION POLICY on the target schema;
+-- RAW is owned by SYSADMIN, so SECURITYADMIN needed an explicit grant first:
+-- (run as SYSADMIN) GRANT CREATE AUTHENTICATION POLICY ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SECURITYADMIN;
+
+CREATE AUTHENTICATION POLICY RAYS_ANALYTICS.RAW.wif_github_only
+  WORKLOAD_IDENTITY_POLICY = (
+    ALLOWED_PROVIDERS = (OIDC)
+    ALLOWED_OIDC_ISSUERS = ('https://token.actions.githubusercontent.com')
+  );
+
+ALTER USER RAYS_ANALYTICS_CI_SERVICE
+  SET AUTHENTICATION POLICY RAYS_ANALYTICS.RAW.wif_github_only;
+```
+
+Confirmed at the time via `DESCRIBE USER RAYS_ANALYTICS_CI_SERVICE` (`HAS_WORKLOAD_IDENTITY: true`) and:
+```sql
+SELECT * FROM TABLE(
+  INFORMATION_SCHEMA.POLICY_REFERENCES(
+    REF_ENTITY_NAME => 'RAYS_ANALYTICS_CI_SERVICE',
+    REF_ENTITY_DOMAIN => 'USER'
+  )
+);
+```
+
+**Active branch:** `fix/ci-snowflake-key-pair-auth`
+
+**Next actions (as of this session):**
+1. Merge `fix/ci-snowflake-key-pair-auth`, closing Phase 4's last blocker
+2. Scope the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role
+3. Before Statcast: add the `dbt source freshness` check/alert and `workflow_dispatch:` fallback trigger to the cron job
+4. Begin the Statcast/pybaseball resource
+5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+Note: `chore/split-claude-md-changelog` remains a separate open branch, not touched this session.
