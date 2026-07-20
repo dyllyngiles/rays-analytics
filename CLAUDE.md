@@ -149,7 +149,7 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 
 **Why GitHub Actions cron stays for Statcast, rather than pulling Dagster/Prefect forward from the bonus track (decided July 2026):** GitHub Actions cron has gotten measurably less reliable in 2026 (scheduler delays since February; auto-disables scheduled workflows after 60 days of repo inactivity — a real risk during MLB's off-season). The `games` resource is unaffected — it re-pulls the full season every run, so a missed firing self-heals. Statcast's incremental cursor won't have that property; a missed run there creates a silent watermark gap. Fix is not a new orchestrator but a `dbt source freshness` check + alert (already in the Phase 5 core plan) plus a `workflow_dispatch:` manual-fallback trigger, both landing before Statcast ships. Revisit Dagster OSS/Prefect Cloud only if this mitigation proves insufficient in practice.
 
-**Why Workload Identity Federation (WIF) over key-pair-in-Secrets for the CI dbt job (decided July 2026):** see Workload Identity Federation (WIF) Notes below for full reasoning, setup, and gotchas. Short version: Snowflake and `dbt-snowflake` both now support it, it removes a stored secret entirely, and the trust binding is scoped tighter than a key-pair ever could be. dlt has no equivalent yet — a known asymmetry for when Phase 5 puts the loader itself into CI.
+**Why key-pair for CI Snowflake auth (reversed July 2026):** see Snowflake CI Auth Notes below for full reasoning. Short version: the original WIF plan assumed `dbt-snowflake` shipped WIF support in May 2026 — checked directly against `dbt-labs/dbt-adapters` PR #1316, which is still open/unmerged as of July 2026, blocked on a maintainer requirement for ongoing integration-test infrastructure. No stable or pre-release `dbt-snowflake` has WIF support. Reversed to key-pair — matches dlt, which also has no WIF support, so no asymmetry.
 
 **dbt Core vs dbt Fusion vs dbt Core v2.0:** dbt Labs open-sourced the Fusion runtime as dbt Core v2.0 under Apache 2.0 at Summit June 2026. v2.0 is alpha; dbt Core v1.11.x remains the right choice for now. dbt Core v1.12 (beta) ships the same Fusion parser via `dbt parse --use-v2-parser` as a dry-run compatibility check. Revisit at Phase 8.
 
@@ -200,7 +200,7 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 - **Resource monitor:** MONTHLY_SPEND_CAP — 15 credits/month, notify at 75%, suspend at 100%
 - **Database:** RAYS_ANALYTICS — **Schemas:** RAW, DEV, PROD
 - **Service user:** DBT_SERVICE_USER — TYPE = SERVICE, SYSADMIN role, key-pair auth. Key: `~/.ssh/dbt_service_user_rsa_key_p8.pem` (PKCS#8)
-- **CI service user:** RAYS_ANALYTICS_CI_SERVICE — TYPE = SERVICE, SYSADMIN role, WIF (OIDC) auth, no key-pair — see WIF Notes below
+- **CI service user:** RAYS_ANALYTICS_CI_SERVICE — TYPE = SERVICE, SYSADMIN role, key-pair auth (reversed from WIF, July 2026). Key: `~/.ssh/ci_service_user_rsa_key_p8.pem` (PKCS#8) — see Snowflake CI Auth Notes below
 
 ---
 
@@ -231,57 +231,44 @@ ALTER USER DBT_SERVICE_USER SET RSA_PUBLIC_KEY='<paste_base64_here>';
 
 ---
 
-### Workload Identity Federation (WIF) Notes
+### Snowflake CI Auth Notes
 
-**Decision (July 2026):** the Snowflake-on-merge CI job authenticates via WIF (OIDC), not key-pair-in-GitHub-Secrets. Snowflake's WIF reached GA August 2025, and `dbt-snowflake` gained WIF support via a PR merged May 20, 2026. Snowflake recommends WIF so no long-lived secret sits in CI; key-pair is now the fallback. No private key or GitHub Secret to manage — trust is scoped to `repo:dyllyngiles/rays-analytics:ref:refs/heads/main` at the identity layer, so a PR-branch workflow can't authenticate as this user regardless of trigger conditions.
+**Decision (reversed July 2026):** the Snowflake-on-merge CI job authenticates via key-pair, not WIF. The "PR merged May 20, 2026" claim was wrong — `dbt-labs/dbt-adapters` PR #1316 ("Adding support for Snowflake Workload Identity Federation") is still open, open since September 2025, blocked on a maintainer requirement for ongoing integration-test infrastructure. The dbt-snowflake v1.12.0 milestone shows it open at 45% complete. Reversed to key-pair — both dlt and dbt now use key-pair in CI, no asymmetry.
 
-**Important asymmetry — dlt does not support WIF.** dlt's Snowflake destination exposes only password/key-pair/OAuth/Snowpark-OAuth-token auth, even though the underlying driver has supported WIF since v4.0. Doesn't block the current CI job (dbt-only), but the Phase 5 cron job (which also runs dlt) will be split-auth: `dbt build` secretless via WIF, dlt still needing key-pair credentials in GitHub Secrets.
+**`RAYS_ANALYTICS_CI_SERVICE` setup, completed this session:**
+- Authentication policy `WIF_GITHUB_ONLY` (in `RAYS_ANALYTICS.RAW`) stays attached and ACTIVE — `AUTHENTICATION_METHODS = [ALL]`, not restricted to WORKLOAD_IDENTITY, so key-pair auth is permitted under it. Left attached rather than removed: dormant, ready if WIF ships later.
+- `RSA_PUBLIC_KEY` was null (WIF meant no key had ever been generated). New key-pair generated and registered:
+```bash
+openssl genrsa -out ci_service_rsa_key.pem 2048
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in ci_service_rsa_key.pem -out ci_service_rsa_key_p8.pem
+openssl rsa -in ci_service_rsa_key.pem -pubout -out ci_service_rsa_key.pub
+```
+Private key: `~/.ssh/ci_service_user_rsa_key_p8.pem` (chmod 600), separate from `DBT_SERVICE_USER`'s key. Verified via `dbt debug --target ci_test` — `ci_test` is a **kept, intentional** local target, not a one-time throwaway: `make dbt-debug-ci` depends on it as a repeatable pre-merge sanity check that CI auth still works before pushing to main. It stays in `~/.dbt/profiles.yml` deliberately. A fresh clone needs to add it manually (not checked in — see Current `profiles.yml` structure below for why credentials stay out of the repo):
 
-**Snowsight setup, completed (pure account-side config):**
-```sql
-USE ROLE SECURITYADMIN;
-
-CREATE USER RAYS_ANALYTICS_CI_SERVICE
-  TYPE = SERVICE
-  WORKLOAD_IDENTITY = (
-    TYPE = OIDC
-    ISSUER = 'https://token.actions.githubusercontent.com'
-    SUBJECT = 'repo:dyllyngiles/rays-analytics:ref:refs/heads/main'
-  )
-  DEFAULT_ROLE = SYSADMIN;
-
-GRANT ROLE SYSADMIN TO USER RAYS_ANALYTICS_CI_SERVICE;
-
--- Authentication policy requires CREATE AUTHENTICATION POLICY on the target schema;
--- RAW is owned by SYSADMIN, so SECURITYADMIN needed an explicit grant first:
--- (run as SYSADMIN) GRANT CREATE AUTHENTICATION POLICY ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SECURITYADMIN;
-
-CREATE AUTHENTICATION POLICY RAYS_ANALYTICS.RAW.wif_github_only
-  WORKLOAD_IDENTITY_POLICY = (
-    ALLOWED_PROVIDERS = (OIDC)
-    ALLOWED_OIDC_ISSUERS = ('https://token.actions.githubusercontent.com')
-  );
-
-ALTER USER RAYS_ANALYTICS_CI_SERVICE
-  SET AUTHENTICATION POLICY RAYS_ANALYTICS.RAW.wif_github_only;
+```yaml
+    ci_test:
+      type: snowflake
+      account: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__HOST') }}"
+      user: RAYS_ANALYTICS_CI_SERVICE
+      private_key_path: ~/.ssh/ci_service_user_rsa_key_p8.pem
+      role: SYSADMIN
+      database: RAYS_ANALYTICS
+      warehouse: COMPUTE_WH
+      schema: PROD
+      threads: 4
 ```
 
-Confirmed via `DESCRIBE USER RAYS_ANALYTICS_CI_SERVICE` (`HAS_WORKLOAD_IDENTITY: true`) and:
-```sql
-SELECT * FROM TABLE(
-  INFORMATION_SCHEMA.POLICY_REFERENCES(
-    REF_ENTITY_NAME => 'RAYS_ANALYTICS_CI_SERVICE',
-    REF_ENTITY_DOMAIN => 'USER'
-  )
-);
-```
+Mirrors the `dev` Snowflake target, but authenticates as `RAYS_ANALYTICS_CI_SERVICE` (the CI service user) with its own key path, instead of `DBT_SERVICE_USER`.
 
-**New gotchas hit while setting this up (distinct from the ACCOUNTADMIN/SYSADMIN ownership pattern below):**
-- `CREATE USER` and `CREATE AUTHENTICATION POLICY` are `SECURITYADMIN`/`USERADMIN` territory, not `SYSADMIN` — a different branch of the hierarchy, not another ownership-gotcha instance. See the domain table in Role Hierarchy & Privilege Notes below.
-- **`DEFAULT_ROLE` on `CREATE USER` doesn't grant the role** — only sets what activates by default *if* the user already holds it. `SHOW GRANTS TO USER` came back empty until `GRANT ROLE SYSADMIN TO USER ...` ran explicitly — no error, just a silently empty grant set.
-- **`AUTHENTICATION POLICY` is schema-scoped, not account-level** — needs `CREATE AUTHENTICATION POLICY` granted on that specific schema. Namespaced inside `RAW` for now (a security object living in a data schema); worth moving to a dedicated schema later, not urgent.
-- **`ALTER USER ... SET AUTHENTICATION POLICY` takes no `=`** — the policy name follows the keywords directly.
-- **`DESCRIBE USER` doesn't surface authentication-policy attachment** — use `INFORMATION_SCHEMA.POLICY_REFERENCES` instead.
+**Gotchas carried over from the original WIF setup, still relevant to this user:**
+- `CREATE USER` / `CREATE AUTHENTICATION POLICY` are `SECURITYADMIN`/`USERADMIN` territory, not `SYSADMIN`.
+- `DEFAULT_ROLE` on `CREATE USER` doesn't grant the role — needs an explicit `GRANT ROLE ... TO USER`.
+- `AUTHENTICATION POLICY` is schema-scoped.
+- `ALTER USER ... SET AUTHENTICATION POLICY` takes no `=`.
+- `DESCRIBE USER` doesn't surface policy attachment — use `INFORMATION_SCHEMA.POLICY_REFERENCES`.
+
+Full original WIF setup SQL (CREATE USER/OIDC block) preserved in CHANGELOG.md for history.
 
 ---
 
@@ -406,13 +393,10 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### Workflow Conventions
 
-- Always `cd rays_analytics` for dbt commands
-- Activate venv and navigate at session start:
-  ```bash
-  cd ~/projects/rays-analytics
-  source .venv/bin/activate
-  cd rays_analytics
-  ```
+- **Repo-root + `--project-dir`, not `cd rays_analytics` (revised July 2026).** `.env` is at repo root; `dbt_project.yml` is in `rays_analytics/`. dbt v1.12+'s native `.env` autoload is CWD-bound with no `--project-dir` support, so it won't fit this repo's multi-tool layout even post-upgrade. Standardized on Makefile targets that run from repo root, explicitly load `.env` via `uv run --env-file .env`, and pass `--project-dir rays_analytics`.
+- **Makefile targets** (repo root): `make setup` (`uv sync --locked`), `make dbt-build` (`uv run --env-file .env dbt build --project-dir rays_analytics`), `make dbt-debug-ci` (same, `dbt debug --target ci_test`).
+- Session start: `cd ~/projects/rays-analytics && source .venv/bin/activate` — no further `cd` needed.
+- (Optional, personal) `direnv` auto-loads `.env` on `cd` — not in the required onboarding path, `direnv allow`'s prompt reads like a broken repo to a first-time cloner.
 - Feature branch for every change, no direct commits to main
 - After `dbt run` — view compiled SQL in `target/compiled/` or use dbt Power User preview panel
 - Close DBeaver before running dbt or Python scripts (DuckDB single-connection limitation)
@@ -431,13 +415,15 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) currently has **one job**, triggered on `pull_request` to `main` only. It runs `dbt build` against DuckDB, first calling `mlb_pipeline.py --destination duckdb` to populate the local database.
+`.github/workflows/ci.yml` has **two jobs**. First: `pull_request` to `main`, `dbt build` against DuckDB after `mlb_pipeline.py --destination duckdb`. Second: `push` to `main` (post-merge), `dbt build` against real Snowflake via key-pair (reversed from WIF — see Snowflake CI Auth Notes above). DuckDB on every PR; Snowflake compute bounded to once per merge.
 
-**Target architecture (Snowflake side built; `ci.yml` not yet touched):** a second job, gated to `push` on `main` (post-merge), running `dbt build` against real Snowflake. **Revised July 2026 to use WIF instead of key-pair-in-Secrets** — see WIF Notes above. `RAYS_ANALYTICS_CI_SERVICE`, its `SYSADMIN` grant, and its OIDC trust policy are already created in Snowsight. The runner's dynamically-generated `profiles.yml` will carry only non-secret identifiers (`authenticator: workload_identity`) — no private key material anywhere in the workflow. DuckDB stays on every PR, bounding Snowflake compute to "once per merged PR."
+**Why `ci.yml` doesn't call `make dbt-build` (deliberate, not a leftover from before the Makefile existed):** `make dbt-build` assumes a local `.env` file (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` directly from GitHub Secrets instead. So both jobs' `working-directory: rays_analytics` + bare `dbt build` is the correct, intended pattern — don't "fix" this to call the Makefile target, it would break the job.
 
-Remaining work, inside `ci.yml` (needs a branch): a second job with a `push`-only trigger, a `permissions: id-token: write` block plus an OIDC-token-fetch step, and a Snowflake `profiles.yml` generation step parallel to the DuckDB one. Confirm and pin the `dbt-snowflake` version that shipped WIF support (PR merged May 20, 2026). Not yet started.
+**Snowflake job steps:** writes `SNOWFLAKE_PRIVATE_KEY` to `$RUNNER_TEMP/ci_key.pem` (chmod 600, never logged), generates `profiles.yml` with `user`/`account` from Secrets and `role`/`database`/`warehouse`/`schema` hardcoded (non-sensitive), runs `dbt build`. No `id-token: write` — key-pair doesn't use OIDC.
 
-**Known asymmetry to carry into Phase 5:** dlt has no WIF support (see WIF Notes) — when the dlt loader itself eventually runs in CI (the Phase 5 cron job), that job will need key-pair credentials in GitHub Secrets for the dlt step even though the dbt step alongside it stays secretless.
+**Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's `dbt source freshness` checks land.
+
+**Running under `SYSADMIN`, not scoped down (flagged July 2026):** broader than the job needs. A `CI_DEPLOYER` custom role (warehouse usage + schema-level create/write only) is a known follow-up, deprioritized behind the README/walkthrough and a baseball-question mart.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -562,13 +548,15 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 ### Current Status
 
-**Active branch:** `chore/split-claude-md-changelog` (split this doc into a slim current-state CLAUDE.md + CHANGELOG.md)
+**Active branch:** `fix/ci-snowflake-key-pair-auth` (reverses WIF plan to key-pair; adds Snowflake CI job, Makefile, doc corrections)
 
 **Next actions:**
-1. Open a feature branch for `ci.yml`: second job (`push`-to-`main` trigger, `permissions: id-token: write`, OIDC-token-fetch step, dynamic Snowflake `profiles.yml` using WIF) — the last Phase 4 blocker, see CI Architecture Notes
-2. Confirm and pin the exact `dbt-snowflake` version that shipped WIF support, then merge, closing Phase 4
+1. Merge `fix/ci-snowflake-key-pair-auth`, closing Phase 4's last blocker
+2. Scope the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes) — deprioritized behind items 3–4
 3. Before Statcast: add the `dbt source freshness` check/alert and `workflow_dispatch:` fallback trigger to the cron job
 4. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
 5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+**Note:** `chore/split-claude-md-changelog` is a separate open branch for splitting this doc — not touched here, still pending.
 
 Full session-by-session history: see CHANGELOG.md.

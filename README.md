@@ -14,8 +14,8 @@ Built for fun and education, not because anyone asked.
 | Warehouse (local) | DuckDB |
 | Warehouse (cloud) | Snowflake |
 | Transformation | dbt Core |
-| Semantic layer | MetricFlow + Cube |
-| Orchestration | Dagster OSS or Prefect |
+| Semantic layer | MetricFlow + Snowflake Semantic Views |
+| Orchestration | GitHub Actions cron (Dagster OSS / Prefect explored as a bonus-track upgrade) |
 | Observability | Elementary |
 | BI | Evidence |
 | CI | GitHub Actions |
@@ -24,7 +24,7 @@ Built for fun and education, not because anyone asked.
 
 ## Data
 
-MLB Stats API — no authentication required. Pulls Tampa Bay Rays game-level data (team ID 139) for the 2022–2024 seasons (486 games) and loads it into a star schema: `dim_teams`, `dim_venues`, `fct_games`.
+MLB Stats API — no authentication required. Pulls Tampa Bay Rays game-level data (team ID 139) for the 2022–2026 seasons (~740 completed games; 2026 still in progress and growing run-over-run) and loads it into a star schema: `dim_teams`, `dim_venues`, `fct_games`.
 
 ---
 
@@ -34,20 +34,19 @@ MLB Stats API — no authentication required. Pulls Tampa Bay Rays game-level da
 # Clone and install dependencies
 git clone git@github.com:dyllyngiles/rays-analytics.git
 cd rays-analytics
-uv sync
+make setup
 
 # Activate the virtual environment
 source .venv/bin/activate
 
-# Load data
-python load_mlb_data.py
+# Load data into local DuckDB
+python mlb_pipeline.py --destination duckdb
 
-# Run dbt
-cd rays_analytics
-dbt build
+# Run dbt (from repo root)
+make dbt-build
 ```
 
-You'll need a `~/.dbt/profiles.yml` pointing at a local DuckDB file. See [dbt profile docs](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles).
+You'll need a `~/.dbt/profiles.yml` with `dev`/`dev_duck` targets — see [dbt profile docs](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles). The DuckDB target needs no credentials; the Snowflake `dev` target reads from a gitignored `.env` at repo root via `env_var()`.
 
 ---
 
