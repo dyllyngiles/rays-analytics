@@ -466,7 +466,7 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ---
 
-#### Phase 4 — Ingestion (~1 week, slimmed for core path) — IN PROGRESS
+#### Phase 4 — Ingestion (~1 week, slimmed for core path) ✅ COMPLETE
 
 **Resolved June 2026:** dlt over Openflow — see Key Architectural Decisions. No longer a blocking pause.
 
@@ -474,8 +474,10 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
-**Known open items:**
-- CI dual-job architecture (Snowflake-on-merge) — Snowflake-side setup done (WIF service user, role grant, auth policy); `ci.yml` changes not yet started — see CI Architecture Notes. Last remaining Phase 4 blocker.
+**Closed out:** CI dual-job architecture (Snowflake-on-merge) — `fix/ci-snowflake-key-pair-auth` (PR #26) merged 2026-07-20, adding the Snowflake CI job on key-pair auth. Last Phase 4 blocker resolved.
+
+**Deferred, not blocking:**
+- Scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes) — punted, no target phase
 - Statcast/pybaseball resource not yet started — needs the `dbt source freshness` check/alert and a `workflow_dispatch:` fallback trigger first (see cron reliability decision above)
 
 **Key notes:**
@@ -548,15 +550,13 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 ### Current Status
 
-**Active branch:** `fix/ci-snowflake-key-pair-auth` (reverses WIF plan to key-pair; adds Snowflake CI job, Makefile, doc corrections)
+**Phase 4 complete.** `fix/ci-snowflake-key-pair-auth` (PR #26) and `chore/split-claude-md-changelog` (PR #25) are both merged; no open feature branches carrying over.
 
 **Next actions:**
-1. Merge `fix/ci-snowflake-key-pair-auth`, closing Phase 4's last blocker
-2. Scope the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes) — deprioritized behind items 3–4
-3. Before Statcast: add the `dbt source freshness` check/alert and `workflow_dispatch:` fallback trigger to the cron job
-4. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
-5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+1. Before Statcast: add the `dbt source freshness` check/alert and `workflow_dispatch:` fallback trigger to the cron job
+2. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
+3. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
-**Note:** `chore/split-claude-md-changelog` is a separate open branch for splitting this doc — not touched here, still pending.
+**Deferred, no target phase:** scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes).
 
 Full session-by-session history: see CHANGELOG.md.
