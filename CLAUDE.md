@@ -75,8 +75,8 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Warehouse (cloud) | Snowflake | ~$30–40/month, X-Small, 60-sec auto-suspend |
 | Transformation | dbt Core + dbt-snowflake | |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | |
-| Orchestration | Dagster OSS or Prefect Cloud free | |
-| Observability | Elementary | dbt package |
+| Orchestration | Dagster OSS (self-hosted) | Decided July 2026 — see Key Architectural Decisions |
+| Observability | Dagster asset checks | No longer Elementary-dependent for Phase 5 freshness alerting — see Phase 5. Elementary now optional, future dbt-test-anomaly-detection decision only |
 | BI | Evidence | Code-first, Git-native |
 | Version control + CI | GitHub + GitHub Actions | |
 | Notebooks | Marimo | Added in Phase 4 |
@@ -123,7 +123,7 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 
 **Cube's necessity reconsidered (added June 2026):** Cube exposes governed metrics over an API — it isn't itself a self-serve dashboard tool. MetricFlow + Snowflake Semantic Views stay core regardless; Cube is now optional pending the Phase 6 BI-tool decision.
 
-**Why Dagster OSS or Prefect over Dagster Cloud:** Dagster Cloud removed free credits from Solo/Starter plans May 1, 2026 (per-asset billing from zero, no grandfathering). Dagster OSS locally or Prefect Cloud's free Hobby tier cover the same learning goals at zero cost. See CHANGELOG.md for full reasoning.
+**Why Dagster OSS, self-hosted, over Dagster Cloud, Prefect OSS, and Prefect Cloud Hobby tier (decided July 2026, resolved from "under re-evaluation"):** Dagster Cloud removed free credits from Solo/Starter plans May 1, 2026 (per-asset billing from zero, no grandfathering) — ruled out on cost grounds alone. Between Dagster OSS and Prefect (OSS or Cloud Hobby), Dagster OSS won: stronger comp/market signal for DE-adjacent AE roles at smaller/mid-market companies, more Python surface area (assets, resources, IO managers vs. Prefect's simpler flow/task decorators), and `dagster-dbt` auto-generates one asset per dbt model from `manifest.json` — preserves the existing dbt DAG with no remodeling. Runs self-hosted on the Mac Mini (kept powered on), no Docker: Dagster OSS defaults to SQLite for run/event storage, with `dagster-webserver` and `dagster-daemon` as plain Python processes under `DAGSTER_HOME`. Fully self-hosted, so no new vendor-pricing risk. Supersedes the July 2026 "GitHub Actions cron" decision below for production scheduling — GitHub Actions keeps its existing PR/merge-time code-correctness gate role unchanged. Full comparison against Prefect OSS/Cloud and Kestra, plus the Prefect/Dagster acquisition context: see CHANGELOG.md.
 
 **Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (decided June 2026; rescoped to bonus track):** Open Catalog is a managed hosting of the actual open-source Apache Polaris, free during the current billing period and reachable by both local dev and CI (unlike self-hosted Polaris on the Mac Mini) while staying open-source-first (unlike AWS Glue). Core Phase 4 skips this entirely — dlt writes straight into Snowflake `RAW`, no bronze layer. Full three-way comparison and reasoning: see CHANGELOG.md.
 
@@ -147,7 +147,7 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 
 **Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
 
-**Why GitHub Actions cron stays for Statcast, rather than pulling Dagster/Prefect forward from the bonus track (decided July 2026):** GitHub Actions cron has gotten measurably less reliable in 2026 (scheduler delays since February; auto-disables scheduled workflows after 60 days of repo inactivity — a real risk during MLB's off-season). The `games` resource is unaffected — it re-pulls the full season every run, so a missed firing self-heals. Statcast's incremental cursor won't have that property; a missed run there creates a silent watermark gap. Fix is not a new orchestrator but a `dbt source freshness` check + alert (already in the Phase 5 core plan) plus a `workflow_dispatch:` manual-fallback trigger, both landing before Statcast ships. Revisit Dagster OSS/Prefect Cloud only if this mitigation proves insufficient in practice.
+**GitHub Actions cron scheduling decision, superseded (decided July 2026, reversed July 2026):** an earlier session kept GitHub Actions cron for production scheduling rather than pulling Dagster/Prefect forward, reasoning that a missed/failed scheduled run risked a "silent watermark gap" once Statcast's real incremental cursor was in play. **That framing was overstated and is corrected here:** as long as the incremental cursor state is stored durably (dlt already does this via pipeline state) and write-disposition is `merge` on a stable key, a missed run just means the next successful run pulls a larger window and self-heals — Baseball Savant/Statcast data doesn't expire, so there's no source-side retention risk. GitHub Actions cron reliability concerns (scheduler delays since February 2026; auto-disables scheduled workflows after 60 days of repo inactivity) were real, but the decision to move to Dagster OSS (see above) was made for long-term architecture, extensibility, and career-signal reasons — not because the cron approach would have caused data loss. `workflow_dispatch:` fallback and the GH Actions dead-man's-switch concern are no longer needed for the scheduling mechanism itself, since Dagster's daemon isn't dependent on GitHub's scheduler. New consideration in its place: a `launchd` LaunchAgent so the Dagster daemon survives Mac reboots automatically. Extended Mac downtime (vs. a quick reboot) is a different, real failure mode — self-heals for `games` (full re-pull pattern) but would not self-heal once Statcast uses a true incremental cursor, same as a missed GH Actions run wouldn't have. An external heartbeat/dead-man's-switch is still a reasonable future addition, just decoupled from the orchestrator choice now.
 
 **Why key-pair for CI Snowflake auth (reversed July 2026):** see Snowflake CI Auth Notes below for full reasoning. Short version: the original WIF plan assumed `dbt-snowflake` shipped WIF support in May 2026 — checked directly against `dbt-labs/dbt-adapters` PR #1316, which is still open/unmerged as of July 2026, blocked on a maintainer requirement for ongoing integration-test infrastructure. No stable or pre-release `dbt-snowflake` has WIF support. Reversed to key-pair — matches dlt, which also has no WIF support, so no asymmetry.
 
@@ -158,6 +158,8 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 **Snowflake Semantic Views:** Standard SQL querying GA March 2026. Zero extra cost, zero infrastructure overhead. Snowflake-only, but this stack is Snowflake-only in production.
 
 **dbt/Fivetran merger:** Completed June 1, 2026 (Fraser CEO, Handy President). dbt Core remains Apache 2.0; no impact on this stack. Long-term Core-vs-commercial investment balance bears watching.
+
+**Prefect/Dagster acquisition (noted July 2026):** Prefect acquired Dagster Labs, announced July 13, 2026; the combined company operates under the Prefect name starting August 2026. Both products currently keep their name, license (Apache 2.0), and roadmap per official statements. Dagster founder Nick Schrock has departed. Doesn't change the Phase 5 Dagster OSS decision above, but worth watching as long-term vendor-risk framing for that choice.
 
 ---
 
@@ -421,7 +423,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Snowflake job steps:** writes `SNOWFLAKE_PRIVATE_KEY` to `$RUNNER_TEMP/ci_key.pem` (chmod 600, never logged), generates `profiles.yml` with `user`/`account` from Secrets and `role`/`database`/`warehouse`/`schema` hardcoded (non-sensitive), runs `dbt build`. No `id-token: write` — key-pair doesn't use OIDC.
 
-**Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's `dbt source freshness` checks land.
+**Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's Dagster asset checks land (superseding the standalone `dbt source freshness` task previously planned here).
 
 **Running under `SYSADMIN`, not scoped down (flagged July 2026):** broader than the job needs. A `CI_DEPLOYER` custom role (warehouse usage + schema-level create/write only) is a known follow-up, deprioritized behind the README/walkthrough and a baseball-question mart.
 
@@ -478,7 +480,7 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 **Deferred, not blocking:**
 - Scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes) — punted, no target phase
-- Statcast/pybaseball resource not yet started — needs the `dbt source freshness` check/alert and a `workflow_dispatch:` fallback trigger first (see cron reliability decision above)
+- Statcast/pybaseball resource not yet started — Dagster orchestration (Phase 5, re-scoped July 2026) is not a data-safety blocker for it (see the corrected cron-scheduling reasoning above), but Phase 5's asset checks are still the planned place for freshness alerting before Statcast ships
 
 **Key notes:**
 - Incremental loading needs a cursor column. `games` does NOT use `dlt.sources.incremental()` (see Key Architectural Decisions); Statcast will need the real cursor pattern.
@@ -492,20 +494,22 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 ---
 
-#### Phase 5 — Orchestration and Observability (~1 week core, bonus extends it)
+#### Phase 5 — Orchestration and Observability (~6–9 hours, likely spanning multiple sessions) — CORE, re-scoped July 2026
 
-**Core goal:** An explicit, scheduled dependency between the dlt loader and `dbt build` — a GitHub Actions cron job satisfies this functionally. Wire up Elementary and Slack alerts; deliberately break something.
+**Core goal (revised):** Self-hosted Dagster OSS replaces GitHub Actions cron as the production scheduler — see the Dagster decision in Key Architectural Decisions. GitHub Actions keeps its existing role as the PR/merge-time code-correctness gate (DuckDB build on PRs, Snowflake build on merge); that doesn't change.
 
-**Key notes (core):**
-- Elementary: run `edr report` after dbt builds; configure Slack alerts for failures
-- Add dbt source freshness checks — stale dlt syncs surface as pipeline failures
-- **Decided July 2026: this freshness check + alert must land before Statcast, not after.** GitHub Actions cron stays as the scheduler (see Key Architectural Decisions for the full reasoning) — the freshness check is what makes a missed/delayed run visible instead of silently absorbed once Statcast's real incremental cursor is in play. Add `workflow_dispatch:` alongside `schedule:` on the cron job at the same time, as a manual fallback.
+**Scope:**
+- Wrap the existing dlt `games` pipeline as a Dagster asset
+- Generate dbt model assets via `@dbt_assets` off `manifest.json` — one asset per dbt model, no DAG remodeling
+- Freshness checks via Dagster asset checks (configurable from dbt `meta` config in `schema.yml`), replacing the standalone `dbt source freshness` task previously planned
+- Alerting: email over Slack for a solo project — simpler, already reaches phone via Mail push, no new account/app to check. Elementary is no longer a Phase 5 dependency; Dagster's own asset checks + sensors cover the freshness-alerting use case natively. Elementary remains a possible separate future decision for dbt-test-specific anomaly detection/reporting beyond what Dagster gives.
+- A `launchd` LaunchAgent so the Dagster daemon survives Mac reboots automatically (see Key Architectural Decisions for the reboot-vs-extended-downtime distinction)
 
-**Bonus-track note:** Asset-based orchestration (Dagster OSS, Prefect Cloud free Hobby tier, or dbt Projects on Snowflake) buys lineage visualization, backfills, sensors, and run-history UI over a plain cron job — genuinely useful, not required. Dagster OSS or Prefect Cloud free tier are the candidates if this gets picked up.
+**Known open item, not urgent:** even with Dagster running, there's currently no alerting for "run succeeded but data is wrong" (e.g., a clean run that pulled zero games, or stale/duplicate data) — only hard failures trigger a notification today (GitHub's default on-failure email). Requires actively writing freshness/volume/quality checks once Dagster is up; doesn't come for free with the migration.
 
-**Skills locked in (core):** Scheduled runs, failure alerting, data observability.
+**Bonus-track note:** dbt Projects on Snowflake remains a candidate to revisit for orchestration if Dagster ever proves insufficient, though the Dagster decision above is not expected to be revisited on a fixed timeline.
 
-**Skills locked in (bonus):** Asset-based orchestration, dependency-graph visualization, backfills.
+**Skills locked in (core):** Asset-based orchestration (Dagster OSS), `dagster-dbt` asset generation from `manifest.json`, asset checks, self-hosted daemon process management (`launchd`), scheduled runs, failure alerting, data observability.
 
 ---
 
@@ -550,12 +554,14 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 ### Current Status
 
-**Phase 4 complete.** `fix/ci-snowflake-key-pair-auth` (PR #26) and `chore/split-claude-md-changelog` (PR #25) are both merged; no open feature branches carrying over.
+**Phase 4 complete.** Phase 5 orchestration decision made and scoped (Dagster OSS, self-hosted) — implementation not yet started; `docs/update-claude-md-phase5-orchestration-decision` is a docs-only planning branch, no code changes.
 
 **Next actions:**
-1. Before Statcast: add the `dbt source freshness` check/alert and `workflow_dispatch:` fallback trigger to the cron job
-2. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
-3. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+1. Set up Dagster OSS locally (`dagster-webserver` + `dagster-daemon` under `DAGSTER_HOME`, no Docker) and a `launchd` LaunchAgent for reboot survival
+2. Wrap the `games` dlt pipeline as a Dagster asset; generate dbt model assets via `@dbt_assets` off `manifest.json`
+3. Add Dagster asset checks for freshness (from dbt `meta` config) and email alerting
+4. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
+5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
 **Deferred, no target phase:** scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes).
 
