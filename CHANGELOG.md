@@ -284,3 +284,12 @@ Note: `chore/split-claude-md-changelog` remains a separate open branch, not touc
 3. Add Dagster asset checks for freshness (from dbt `meta` config) and email alerting
 4. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
 5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+---
+
+**Session (August 2026) — README/CLAUDE.md sync, built-vs-planned clarity, `make dbt-build-duckdb`:**
+- Added a `dbt-build-duckdb` Makefile target (mirrors `dbt-build`, targets `dev_duck`) so local DuckDB refreshes don't need the full dbt invocation typed out — committed on `chore/add-dbt-build-duckdb-target`.
+- Found README.md had drifted from CLAUDE.md/CHANGELOG.md: it still listed "GitHub Actions cron" as the orchestration layer and Elementary as observability, both superseded by the July 2026 Dagster OSS decision.
+- **Bigger gap found on a closer pass:** both CLAUDE.md's stack table and README's stack table read as if every listed tool were actually running. Checked `pyproject.toml` and the repo tree directly — only dlt, dbt-core/dbt-snowflake, DuckDB/Snowflake, and GitHub Actions are real today. Dagster is a made decision with zero implementation yet (GitHub Actions cron is still the only scheduler actually executing runs); MetricFlow, Snowflake Semantic Views, and Evidence are Phase 6+ and not started; Marimo had a stale "Added in Phase 4" note in CLAUDE.md despite never being added to `pyproject.toml`.
+- Fixed both docs to distinguish status explicitly: CLAUDE.md's stack table gained a **Status** column (Running / Decided-not-implemented / Planned / Bonus-track-not-started); README's single stack table was split into three — Built and running, Decided not yet implemented, Planned (Phase 6+). Corrected the Marimo note in CLAUDE.md in the same pass.
+- This CHANGELOG was otherwise current — its Phase 5 decision narrative and Next Actions list already correctly describe Dagster as decided-but-not-started, so no factual correction needed there beyond this entry.

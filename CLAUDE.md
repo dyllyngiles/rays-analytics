@@ -10,9 +10,9 @@
 
 ### About Me
 
-My name is Dyllyn Giles, based in Lexington, Kentucky. I came in with dbt and BI experience but no hands-on modern cloud warehouse experience — this project is where that's been built from scratch. Goal: a complete, portfolio-ready modern ELT stack for learning and career development. I prefer to understand what I'm doing rather than just following commands.
+I started this project with dbt and BI experience but no hands-on modern cloud warehouse experience — this project is where that's been built. Goal: a complete, portfolio-ready modern ELT stack for learning and career development. I prefer to understand what I'm doing rather than just following commands.
 
-**Why I'm actually doing this project:** curiosity and enjoyment, full stop. Job marketability is real and welcome but not the filter for what's worth exploring — don't gate discussing/prototyping an idea behind "does this earn its place." That scrutiny is for what becomes permanent, maintained stack infrastructure. Default to following interesting tangents.
+**Why I'm actually doing this project:** Curiosity and enjoyment. Job marketability is real and welcome but not the filter for what's worth exploring — don't gate discussing/prototyping an idea behind "does this earn its place." That scrutiny is for what becomes permanent, maintained stack infrastructure. Default to following interesting tangents.
 
 That said, I still want honest pushback when something is actually unsound, outdated, or solving a problem that doesn't exist — different from ROI-gating, and I want it regardless of how fun the idea sounded. Real constraint I care about: not spending a lot of money. Flag other practical parameters as they come up — ongoing maintenance burden, new credentials meaning new security surface area, and the 16GB RAM ceiling.
 
@@ -66,21 +66,21 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 ### The Stack
 
-| Layer | Tool | Notes |
-|---|---|---|
-| Ingestion | dlt | Python library, no Docker |
-| Bronze storage | Amazon S3 | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
-| Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Free during current billing period; resolves CI reachability; same software as self-hosted Polaris if revisited later |
-| Warehouse (local dev) | DuckDB | Gitignored, single-file |
-| Warehouse (cloud) | Snowflake | ~$30–40/month, X-Small, 60-sec auto-suspend |
-| Transformation | dbt Core + dbt-snowflake | |
-| Semantic layer | MetricFlow + Cube Core/Cloud free | |
-| Orchestration | Dagster OSS (self-hosted) | Decided July 2026 — see Key Architectural Decisions |
-| Observability | Dagster asset checks | No longer Elementary-dependent for Phase 5 freshness alerting — see Phase 5. Elementary now optional, future dbt-test-anomaly-detection decision only |
-| BI | Evidence | Code-first, Git-native |
-| Version control + CI | GitHub + GitHub Actions | |
-| Notebooks | Marimo | Added in Phase 4 |
-| AI development | Claude Pro + Claude Code + Anthropic API | Phase 7+ |
+| Layer | Tool | Status | Notes |
+|---|---|---|---|
+| Ingestion | dlt | **Running** | Python library, no Docker |
+| Bronze storage | Amazon S3 | Bonus track, not started | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
+| Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Bonus track, not started | Free during current billing period; resolves CI reachability; same software as self-hosted Polaris if revisited later |
+| Warehouse (local dev) | DuckDB | **Running** | Gitignored, single-file |
+| Warehouse (cloud) | Snowflake | **Running** | ~$30–40/month, X-Small, 60-sec auto-suspend |
+| Transformation | dbt Core + dbt-snowflake | **Running** | |
+| Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
+| Orchestration | Dagster OSS (self-hosted) | Decided, not yet implemented | Chosen July 2026 — see Key Architectural Decisions. GitHub Actions cron is still the only scheduler actually running today |
+| Observability | Dagster asset checks | Decided, not yet implemented | Depends on Dagster setup above. Elementary now optional, future dbt-test-anomaly-detection decision only |
+| BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
+| Version control + CI | GitHub + GitHub Actions | **Running** | |
+| Notebooks | Marimo | Planned | Not yet added to `pyproject.toml` despite an earlier "Added in Phase 4" note — corrected here |
+| AI development | Claude Pro + Claude Code + Anthropic API | Planned, Phase 7+ | Claude Code itself is in active use for this project; the Phase 7 AI-layer integration (Cortex Analyst, API-driven querying) hasn't started |
 
 ### Scope Tracks (added June 2026)
 
