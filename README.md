@@ -8,17 +8,29 @@ Built for fun and education, not because anyone asked.
 
 ## Stack
 
+**Built and running:**
+
 | Layer | Tool |
 |---|---|
 | Ingestion | dlt |
 | Warehouse (local) | DuckDB |
 | Warehouse (cloud) | Snowflake |
 | Transformation | dbt Core |
-| Semantic layer | MetricFlow + Snowflake Semantic Views |
-| Orchestration | GitHub Actions cron (Dagster OSS / Prefect explored as a bonus-track upgrade) |
-| Observability | Elementary |
-| BI | Evidence |
 | CI | GitHub Actions |
+
+**Decided, not yet implemented:**
+
+| Layer | Tool | Status |
+|---|---|---|
+| Orchestration | Dagster OSS (self-hosted) | Chosen July 2026; GitHub Actions cron is the only scheduler running today |
+| Observability | Dagster asset checks | Depends on the Dagster setup above |
+
+**Planned (Phase 6+):**
+
+| Layer | Tool |
+|---|---|
+| Semantic layer | MetricFlow + Snowflake Semantic Views |
+| BI | Evidence |
 
 ---
 
@@ -42,8 +54,11 @@ source .venv/bin/activate
 # Load data into local DuckDB
 python mlb_pipeline.py --destination duckdb
 
-# Run dbt (from repo root)
+# Run dbt against Snowflake (from repo root)
 make dbt-build
+
+# Or against local DuckDB
+make dbt-build-duckdb
 ```
 
 You'll need a `~/.dbt/profiles.yml` with `dev`/`dev_duck` targets — see [dbt profile docs](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles). The DuckDB target needs no credentials; the Snowflake `dev` target reads from a gitignored `.env` at repo root via `env_var()`.
