@@ -62,7 +62,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 **Docker is no longer avoided outright (reversed August 2026).** It now runs via Docker Compose on a VPS for self-hosted Dagster, not the Mac Mini — the original RAM-ceiling reasoning no longer applies. The Mac Mini runs no containers.
 
-**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema; DuckDB target retained as `dev_duck`.
+**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema. `dev_duck` removal decided, not yet implemented — see CI Architecture Notes.
 
 **DuckDB path is always relative** (`dev.duckdb`) from repo root, never hardcoded absolute. `DUCKDB_PATH` overrides it in CI.
 
@@ -77,7 +77,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Ingestion | dlt | **Running** | Python library, no Docker |
 | Bronze storage | Amazon S3 | Bonus track, not started | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
 | Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Bonus track, not started | Free during current billing period; same software as self-hosted Polaris if revisited |
-| Warehouse (local dev) | DuckDB | Demoted, ad hoc scratchpad only | Dropped as a dbt build target August 2026 (see Key Architectural Decisions) — CLI/Marimo only now. **ci.yml/Makefile/profiles.yml not yet updated to match, see Current Status** |
+| Warehouse (local dev) | DuckDB | Demoted, ad hoc scratchpad only | Dropped as a dbt build target August 2026 — CLI/Marimo only now. CI's post-DuckDB shape designed, not implemented, see CI Architecture Notes |
 | Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend — raised from ~$30–40 now that dbt builds against Snowflake exclusively |
 | Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target as of August 2026 |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
@@ -149,7 +149,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **dlt pipeline destination is parameterized (June 2026):** `mlb_pipeline.py` takes `--destination duckdb|snowflake` (default `duckdb`) so DuckDB refreshes stay free while Snowflake spend is opt-in.
 
-**DuckDB dropped as a dbt build target (decided August 2026):** dbt builds only against Snowflake now; DuckDB demoted to an ad hoc scratchpad (CLI/Marimo) — the multi-engine goal never paid for itself at this size. **`ci.yml`/`profiles.yml`/Makefile not yet updated to match — see Current Status.**
+**DuckDB dropped as a dbt build target (decided August 2026):** dbt builds only against Snowflake now; DuckDB demoted to an ad hoc scratchpad — the multi-engine goal never paid for itself at this size. CI's response: see CI Architecture Notes.
 
 **Delta Lake evaluated and rejected (decided August 2026):** see Tools Not in the Stack.
 
@@ -436,7 +436,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-`.github/workflows/ci.yml` has **two jobs**. First: `pull_request` to `main`, `dbt build` against DuckDB after `mlb_pipeline.py --destination duckdb`. Second: `push` to `main` (post-merge), `dbt build` against real Snowflake via key-pair (reversed from WIF — see Snowflake CI Auth Notes above). DuckDB on every PR; Snowflake compute bounded to once per merge.
+`.github/workflows/ci.yml` currently has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
+
+**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — `state:modified+` bounds that cost, doesn't eliminate it. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt DuckDB-CLI-scratchpad target is optional, not assumed wanted.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate, not a leftover from before the Makefile existed):** `make dbt-build` assumes a local `.env` file (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` directly from GitHub Secrets instead. So both jobs' `working-directory: rays_analytics` + bare `dbt build` is the correct, intended pattern — don't "fix" this to call the Makefile target, it would break the job.
 
@@ -446,7 +448,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Running under `SYSADMIN`, not scoped down (flagged July 2026):** broader than the job needs. A `CI_DEPLOYER` custom role (warehouse usage + schema-level create/write only) is a known follow-up, deprioritized behind the README/walkthrough and a baseball-question mart.
 
-**Design decided for the above, not yet implemented (decided August 2026):** a two-database, two-role Snowflake dev/prod split — `RAYS_ANALYTICS_DEV` (broad-access `DEV_ROLE`) and `RAYS_ANALYTICS` (scoped `CI_DEPLOYER` role, CI-only). This is the standard Snowflake/dbt community pattern: separate database per environment plus separate role per environment, not a schema-only split like the current `RAW`/`DEV`/`PROD` schemas inside one database. Gives the already-tracked `CI_DEPLOYER` item a concrete shape; still no target implementation date.
+**Design decided, not implemented (August 2026):** a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad access) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, CI-only) — replacing the current schema-only `RAW`/`DEV`/`PROD` split in one database.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -564,8 +566,7 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
 **Deferred, no target phase:**
-- `CI_DEPLOYER` role-scoping — design decided (two-database/two-role split, see CI Architecture Notes), not implemented
-- `ci.yml`/`profiles.yml`/`Makefile` still reflect the old DuckDB-build pattern, need updating to match the August 2026 decision
+- `CI_DEPLOYER` role-scoping and CI's post-DuckDB shape — both fully designed, see CI Architecture Notes, not implemented
 - Next data source will need dlt's real `incremental()` cursor pattern (`games` doesn't use it)
 - Deliberately introduce a schema change and observe dlt/dbt source freshness response — not yet done
 
