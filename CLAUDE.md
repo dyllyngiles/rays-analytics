@@ -2,6 +2,12 @@
 
 ---
 
+### Doc Maintenance (check every session that edits this file)
+
+Claude Code has a 40k-character limit on this file. Run `wc -c CLAUDE.md` before considering any edit to this file done — not just after a large pass. Reasoning belongs in CHANGELOG.md, not here: cap Key Architectural Decisions bullets at one sentence of decision + one clause of why, and when a decision reverses another, delete the superseded reasoning from CLAUDE.md entirely (confirm CHANGELOG.md has the full "we tried X, moved to Y" history first). If `wc -c` comes back over 40k, compress before ending the session — don't leave it over the limit for the next session to discover.
+
+---
+
 ## Part 1 — Stable Reference
 
 *This section changes rarely. It covers who I am, how the environment is set up, what tools are in the stack and why, and what was ruled out. Update only when a fundamental decision changes.*
@@ -54,9 +60,9 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 - `--locked`: Resolves dependencies, then **fails if the result would differ from the committed `uv.lock`** — catches drift, the correct CI choice.
 - `--frozen`: Skips resolution entirely, installs whatever is in `uv.lock` without checking `pyproject.toml` — faster in deployment, doesn't catch drift.
 
-**Docker is intentionally avoided.** 16GB RAM constraint; entire stack runs as Python or Node processes.
+**Docker is no longer avoided outright (reversed August 2026).** It now runs via Docker Compose on a VPS for self-hosted Dagster, not the Mac Mini — the original RAM-ceiling reasoning no longer applies. The Mac Mini runs no containers.
 
-**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema; DuckDB target retained as `dev_duck`.
+**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema. `dev_duck` removal decided, not yet implemented — see CI Architecture Notes.
 
 **DuckDB path is always relative** (`dev.duckdb`) from repo root, never hardcoded absolute. `DUCKDB_PATH` overrides it in CI.
 
@@ -70,17 +76,17 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 |---|---|---|---|
 | Ingestion | dlt | **Running** | Python library, no Docker |
 | Bronze storage | Amazon S3 | Bonus track, not started | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
-| Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Bonus track, not started | Free during current billing period; resolves CI reachability; same software as self-hosted Polaris if revisited later |
-| Warehouse (local dev) | DuckDB | **Running** | Gitignored, single-file |
-| Warehouse (cloud) | Snowflake | **Running** | ~$30–40/month, X-Small, 60-sec auto-suspend |
-| Transformation | dbt Core + dbt-snowflake | **Running** | |
+| Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Bonus track, not started | Free during current billing period; same software as self-hosted Polaris if revisited |
+| Warehouse (local dev) | DuckDB | Demoted, ad hoc scratchpad only | Dropped as a dbt build target August 2026 — CLI/Marimo only now. CI's post-DuckDB shape designed, not implemented, see CI Architecture Notes |
+| Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend — raised from ~$30–40 now that dbt builds against Snowflake exclusively |
+| Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target as of August 2026 |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
-| Orchestration | Dagster OSS (self-hosted) | Decided, not yet implemented | Chosen July 2026 — see Key Architectural Decisions. GitHub Actions cron is still the only scheduler actually running today |
+| Orchestration | Dagster OSS (self-hosted, Docker Compose on a VPS) | Decided, not yet implemented | Tool chosen July 2026, VPS hosting decided August 2026 — supersedes the Mac Mini/launchd plan. GitHub Actions cron is still the only scheduler running today |
 | Observability | Dagster asset checks | Decided, not yet implemented | Depends on Dagster setup above. Elementary now optional, future dbt-test-anomaly-detection decision only |
 | BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
 | Version control + CI | GitHub + GitHub Actions | **Running** | |
-| Notebooks | Marimo | Planned | Not yet added to `pyproject.toml` despite an earlier "Added in Phase 4" note — corrected here |
-| AI development | Claude Pro + Claude Code + Anthropic API | Planned, Phase 7+ | Claude Code itself is in active use for this project; the Phase 7 AI-layer integration (Cortex Analyst, API-driven querying) hasn't started |
+| Notebooks | Marimo | **Running** | Added to `pyproject.toml` August 2026; ad hoc DuckDB scratchpad use case |
+| AI development | Claude Pro + Claude Code + Anthropic API | Planned, Phase 7+ | Claude Code itself is in active use; the Phase 7 AI-layer integration hasn't started |
 
 ### Scope Tracks (added June 2026)
 
@@ -107,59 +113,67 @@ Roadmap is split into two tracks so the application timeline isn't gated by plat
 - Snowflake Semantic Views (GA March 2026) — warehouse-native semantic layer, zero extra cost
 - Snowflake Cortex Analyst — NL querying over semantic views, ~$5–15/month at hobby scale
 
-**Estimated monthly cost: ~$60–75/month** — Snowflake ~$30–40, Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, rest free.
+**Estimated monthly cost: ~$65–95/month + an undecided VPS cost** — Snowflake ~$35–55 (raised from ~$30–40 now that DuckDB is dropped as a dbt build target), Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, rest free. **VPS provider/size not yet decided** — not estimated here.
 
 ---
 
 ### Key Architectural Decisions
 
-Full reasoning and alternatives considered for settled decisions: see CHANGELOG.md.
+Every bullet below is a one-line decision + reason. Full reasoning, alternatives considered, and reversal history for all of these: see CHANGELOG.md.
 
-**Why dlt over Airbyte:** Airbyte is Docker-heavy with an uncertain free tier; dlt teaches ingestion at code level instead of abstracting it behind a UI.
+**Why dlt over Airbyte:** Airbyte is Docker-heavy with an uncertain free tier; dlt teaches ingestion at code level.
 
-**Why dlt over Snowflake Openflow (resolved June 2026):** Openflow fits its ~20 supported connectors with no customization needed; MLB Stats API and pybaseball/Statcast are bespoke sources outside that list, and Openflow needs real infrastructure (BYOC/Snowpark Container Services) that cuts against the RAM ceiling.
+**Why dlt over Snowflake Openflow (June 2026):** MLB Stats API/pybaseball are bespoke sources outside Openflow's ~20 supported connectors, and Openflow needs infra that fights the RAM ceiling.
 
-**Why MetricFlow + Cube over dbt Cloud:** MetricFlow is the OSI v1.0 reference implementation for semantic layers; Cube provides the API exposure layer dbt Cloud would otherwise lock behind $100/month. See CHANGELOG.md for full reasoning.
+**Why MetricFlow + Cube over dbt Cloud:** MetricFlow is the OSI v1.0 reference implementation for semantic layers; Cube covers the API-exposure layer dbt Cloud locks behind $100/month.
 
-**Cube's necessity reconsidered (added June 2026):** Cube exposes governed metrics over an API — it isn't itself a self-serve dashboard tool. MetricFlow + Snowflake Semantic Views stay core regardless; Cube is now optional pending the Phase 6 BI-tool decision.
+**Cube's necessity reconsidered (June 2026):** Cube isn't itself a dashboard tool — now optional pending the Phase 6 BI-tool decision.
 
-**Why Dagster OSS, self-hosted, over Dagster Cloud, Prefect OSS, and Prefect Cloud Hobby tier (decided July 2026, resolved from "under re-evaluation"):** Dagster Cloud removed free credits from Solo/Starter plans May 1, 2026 (per-asset billing from zero, no grandfathering) — ruled out on cost grounds alone. Between Dagster OSS and Prefect (OSS or Cloud Hobby), Dagster OSS won: stronger comp/market signal for DE-adjacent AE roles at smaller/mid-market companies, more Python surface area (assets, resources, IO managers vs. Prefect's simpler flow/task decorators), and `dagster-dbt` auto-generates one asset per dbt model from `manifest.json` — preserves the existing dbt DAG with no remodeling. Runs self-hosted on the Mac Mini (kept powered on), no Docker: Dagster OSS defaults to SQLite for run/event storage, with `dagster-webserver` and `dagster-daemon` as plain Python processes under `DAGSTER_HOME`. Fully self-hosted, so no new vendor-pricing risk. Supersedes the July 2026 "GitHub Actions cron" decision below for production scheduling — GitHub Actions keeps its existing PR/merge-time code-correctness gate role unchanged. Full comparison against Prefect OSS/Cloud and Kestra, plus the Prefect/Dagster acquisition context: see CHANGELOG.md.
+**Dagster OSS, self-hosted, over Dagster Cloud/Prefect (decided July 2026):** best comp/market signal for DE-adjacent AE roles; `dagster-dbt` auto-generates one asset per dbt model with no DAG remodeling.
 
-**Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (decided June 2026; rescoped to bonus track):** Open Catalog is a managed hosting of the actual open-source Apache Polaris, free during the current billing period and reachable by both local dev and CI (unlike self-hosted Polaris on the Mac Mini) while staying open-source-first (unlike AWS Glue). Core Phase 4 skips this entirely — dlt writes straight into Snowflake `RAW`, no bronze layer. Full three-way comparison and reasoning: see CHANGELOG.md.
+**Dagster Cloud Solo/Starter re-confirmed disqualifying (decided August 2026):** ~49 dbt-model assets under per-credit billing runs ~$60/month in credits alone.
 
-**Why Evidence over Metabase:** Code-first, Git-native, fits the everything-as-code philosophy. Cube Cloud free tier is dev/test only — Cube Core runs as a local Node process at zero cost if needed.
+**Orchestration hosting: self-hosted Dagster OSS on a VPS via Docker Compose, not the Mac Mini (decided August 2026, supersedes the Mac Mini/launchd plan):** always-on/remote-reachable Mac Mini hosting proved impractical in testing. Four services (webserver, daemon, user-code gRPC server, Postgres) + Tailscale sidecar. **VPS provider not yet chosen.** Full reasoning: see CHANGELOG.md.
 
-**Public self-serve demo, added June 2026:** Evidence ships a DuckDB engine to the browser via WebAssembly (Universal SQL) — a static GitHub Pages site built from exported Parquet snapshots lets any visitor run live SQL client-side, no backend/credentials/per-visitor cost. Separate from the internal BI decision below. Perspective (FINOS) is the fallback if drag-and-drop pivoting matters more than filter-driven interactivity.
+**Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (June 2026, bonus track):** Open Catalog is managed Polaris — free, CI-reachable, open-source-first.
 
-**Self-serve BI tool decision, added June 2026, deferred to Phase 6:** Lightdash reads metrics directly from dbt YAML for a genuine point-and-click explorer, but self-hosting needs Docker (conflicts with no-Docker stance) vs. Metabase (no Docker, but metrics live outside dbt). Not yet decided.
+**Why Evidence over Metabase:** Code-first, Git-native; Cube Core runs as a free local Node process if needed.
 
-**dlt resource design for `games` — completed games only, no live/in-progress state (decided June 2026):** The `games` resource filters to `Final`/`Completed Early` before yielding, so unplayed or in-progress games never reach `raw.games` — a deliberate scope call, not a technical limitation. Full reasoning: see CHANGELOG.md.
+**Public self-serve demo (June 2026):** Evidence's Universal SQL (DuckDB-WASM) over Parquet on GitHub Pages — zero backend cost.
 
-**Why `games` doesn't use dlt's `incremental()` cursor (decided June 2026):** The schedule endpoint doesn't expose a true modified-since cursor and returns the whole season every call regardless, so `games` uses full-season re-pull + `merge` write-disposition keyed on `game_pk` instead. **This will not hold at Statcast scale** — see Phase 4 notes; pitch-level data has real cursor potential (game date) and re-pulling full history every run isn't viable at that volume. Full reasoning: see CHANGELOG.md.
+**Self-serve BI tool decision (June 2026, deferred to Phase 6):** Lightdash needs Docker; Metabase keeps metrics outside dbt. Not yet decided.
 
-**dlt pipeline destination is parameterized, not hardcoded (decided June 2026):** `mlb_pipeline.py` takes `--destination duckdb|snowflake` as a CLI flag (default `duckdb`). Only the `pipeline.run()` destination argument changes — chosen so DuckDB refreshes freely at zero cost while Snowflake compute is only spent when explicitly requested. CI's DuckDB and Snowflake jobs will call the same script with different flags.
+**dlt `games` resource — completed games only (June 2026):** filters to `Final`/`Completed Early` before yielding — a deliberate scope call, not a technical limitation.
 
-**dlt table ownership gotcha (hit June 2026, again on Snowflake July 2026):** dlt cannot retrofit its tracking columns (`_dlt_id`, `_dlt_load_id`) onto a table it didn't create (DuckDB: `Parser Error: Adding columns with constraints not yet supported`). Fix: any table dlt owns must be created by dlt from a clean slate — drop it and let the pipeline recreate it.
+**Why `games` doesn't use dlt's `incremental()` (June 2026):** the schedule endpoint has no true modified-since cursor, so full-season re-pull + `merge` on `game_pk` is used instead — won't hold once a higher-volume, real-cursor source is added.
 
-**`dim_teams`/`dim_venues` deduplication — most-recent-name-wins (decided June 2026):** Team/venue names can change over time for the same numeric id (relocation, sponsorship renames), which broke a plain `(id, name)` dedup. Fixed by ranking rows per id by `game_date desc` and keeping only the most recent name. Full reasoning and alternatives considered: see CHANGELOG.md.
+**dlt pipeline destination is parameterized (June 2026):** `mlb_pipeline.py` takes `--destination duckdb|snowflake` (default `duckdb`) so DuckDB refreshes stay free while Snowflake spend is opt-in.
 
-**Secrets consolidation — single `.env` shared by dbt and dlt, no `.dlt/secrets.toml` (decided July 2026):** dlt and dbt each kept a separate credential store for the same Snowflake account/service user. Both now read one gitignored `.env` at repo root: dlt via `DESTINATION__SNOWFLAKE__CREDENTIALS__*` env vars, dbt via `env_var()` in `profiles.yml` (see Current `profiles.yml` structure below). GitHub Secrets for CI stay a separate third location. Full reasoning: see CHANGELOG.md.
+**DuckDB dropped as a dbt build target (decided August 2026):** dbt builds only against Snowflake now; DuckDB demoted to an ad hoc scratchpad — the multi-engine goal never paid for itself at this size. CI's response: see CI Architecture Notes.
 
-**Why 16GB Mac Mini is sufficient:** Docker has been removed from the stack entirely. All tools run as Python or Node processes. No containers.
+**Delta Lake evaluated and rejected (decided August 2026):** see Tools Not in the Stack.
 
-**GitHub Actions cron scheduling decision, superseded (decided July 2026, reversed July 2026):** an earlier session kept GitHub Actions cron for production scheduling rather than pulling Dagster/Prefect forward, reasoning that a missed/failed scheduled run risked a "silent watermark gap" once Statcast's real incremental cursor was in play. **That framing was overstated and is corrected here:** as long as the incremental cursor state is stored durably (dlt already does this via pipeline state) and write-disposition is `merge` on a stable key, a missed run just means the next successful run pulls a larger window and self-heals — Baseball Savant/Statcast data doesn't expire, so there's no source-side retention risk. GitHub Actions cron reliability concerns (scheduler delays since February 2026; auto-disables scheduled workflows after 60 days of repo inactivity) were real, but the decision to move to Dagster OSS (see above) was made for long-term architecture, extensibility, and career-signal reasons — not because the cron approach would have caused data loss. `workflow_dispatch:` fallback and the GH Actions dead-man's-switch concern are no longer needed for the scheduling mechanism itself, since Dagster's daemon isn't dependent on GitHub's scheduler. New consideration in its place: a `launchd` LaunchAgent so the Dagster daemon survives Mac reboots automatically. Extended Mac downtime (vs. a quick reboot) is a different, real failure mode — self-heals for `games` (full re-pull pattern) but would not self-heal once Statcast uses a true incremental cursor, same as a missed GH Actions run wouldn't have. An external heartbeat/dead-man's-switch is still a reasonable future addition, just decoupled from the orchestrator choice now.
+**dlt table ownership gotcha (hit June/July 2026):** dlt can't retrofit tracking columns onto a table it didn't create — drop and let dlt recreate it from a clean slate.
 
-**Why key-pair for CI Snowflake auth (reversed July 2026):** see Snowflake CI Auth Notes below for full reasoning. Short version: the original WIF plan assumed `dbt-snowflake` shipped WIF support in May 2026 — checked directly against `dbt-labs/dbt-adapters` PR #1316, which is still open/unmerged as of July 2026, blocked on a maintainer requirement for ongoing integration-test infrastructure. No stable or pre-release `dbt-snowflake` has WIF support. Reversed to key-pair — matches dlt, which also has no WIF support, so no asymmetry.
+**`dim_teams`/`dim_venues` dedup — most-recent-name-wins (June 2026):** ranks rows per id by `game_date desc` to handle team/venue renames over time.
 
-**dbt Core vs dbt Fusion vs dbt Core v2.0:** dbt Labs open-sourced the Fusion runtime as dbt Core v2.0 under Apache 2.0 at Summit June 2026. v2.0 is alpha; dbt Core v1.11.x remains the right choice for now. dbt Core v1.12 (beta) ships the same Fusion parser via `dbt parse --use-v2-parser` as a dry-run compatibility check. Revisit at Phase 8.
+**Secrets consolidation — single `.env` (decided July 2026):** dlt and dbt both read one gitignored `.env` at repo root, replacing a separate `.dlt/secrets.toml`.
 
-**Snowflake-native dbt:** GA November 2025. No additional licensing cost — pay only warehouse credits. Worth exploring alongside the local dbt workflow in Phase 3.
+**Why 16GB Mac Mini is sufficient (reworded August 2026):** Docker now runs on the VPS, not the Mac Mini, so the RAM ceiling isn't the reason Docker is or isn't used anywhere in the stack.
 
-**Snowflake Semantic Views:** Standard SQL querying GA March 2026. Zero extra cost, zero infrastructure overhead. Snowflake-only, but this stack is Snowflake-only in production.
+**GitHub Actions cron for production scheduling — reversed to Dagster OSS (decided July 2026, hosting revised August 2026):** GitHub Actions keeps its PR/merge-time gate role; production scheduling moved to Dagster for architecture/career-signal reasons, not data-loss risk. Full history: see CHANGELOG.md.
 
-**dbt/Fivetran merger:** Completed June 1, 2026 (Fraser CEO, Handy President). dbt Core remains Apache 2.0; no impact on this stack. Long-term Core-vs-commercial investment balance bears watching.
+**Why key-pair for CI Snowflake auth (reversed July 2026):** the WIF prerequisite (`dbt-labs/dbt-adapters` PR #1316) was never merged — key-pair matches dlt, no asymmetry. See Snowflake CI Auth Notes below.
 
-**Prefect/Dagster acquisition (noted July 2026):** Prefect acquired Dagster Labs, announced July 13, 2026; the combined company operates under the Prefect name starting August 2026. Both products currently keep their name, license (Apache 2.0), and roadmap per official statements. Dagster founder Nick Schrock has departed. Doesn't change the Phase 5 Dagster OSS decision above, but worth watching as long-term vendor-risk framing for that choice.
+**dbt Core vs dbt Fusion vs dbt Core v2.0:** v2.0 (Fusion, Apache 2.0) is alpha; v1.11.x stays the daily driver until Phase 8.
+
+**Snowflake-native dbt:** GA November 2025, no added licensing cost beyond warehouse credits.
+
+**Snowflake Semantic Views:** GA March 2026, zero extra cost, Snowflake-only (matches this stack's Snowflake-only production posture).
+
+**dbt/Fivetran merger:** completed June 2026; dbt Core stays Apache 2.0, no impact on this stack.
+
+**Prefect/Dagster acquisition (noted July 2026):** both stay Apache 2.0/self-hostable — doesn't change the Dagster OSS decision, just vendor-risk framing to watch.
 
 ---
 
@@ -170,13 +184,17 @@ Full reasoning and alternatives considered for settled decisions: see CHANGELOG.
 | Airbyte | Docker-heavy; free tier uncertain; dlt teaches more |
 | Dagster Cloud | Free credits removed May 2026; per-asset billing from zero |
 | dbt Cloud | $100/seat/month for Semantic Layer API access |
-| dbt Fusion (distribution) | Proprietary extensions above the Apache 2.0 runtime; v2.0 alpha not production-ready; Core v1.11.x is current and stable |
+| dbt Fusion (distribution) | Proprietary extensions above Apache 2.0 runtime; v2.0 alpha not production-ready |
 | Fivetran | Pricing restructured March 2025; per-connector costs increased 50–60% |
 | Jupyter | Replaced by Marimo — git-friendly, no hidden state, saves as Python files |
-| Docker | RAM constraint; not needed for this stack |
 | MotherDuck | Third portability target considered June 2026; deprioritized — work-related interest, not project-specific |
 | AWS Glue | Considered for the Iceberg catalog; zero-ops but proprietary |
 | Airflow | Common in AE postings but not required — concepts transfer from Dagster/Prefect |
+| Delta Lake | Bronze-layer dedup alternative, considered Aug 2026; added complexity not worth it, lower job-market signal than the Iceberg bonus track |
+| AWS-native orchestration hosting (EC2/ECS/RDS) | Considered Aug 2026; costlier/over-complex for a solo ~daily pipeline |
+
+
+*Docker itself is no longer in this table — see Key Environment Decisions (reversed August 2026).*
 
 ---
 
@@ -410,6 +428,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - `git config --global fetch.prune true` is set — merged feature branches don't linger as stale tracking refs
 - GitHub has "automatically delete head branches" enabled — local branches still need an explicit `git branch -d` after
 - Pull past PR descriptions with `gh pr list --state all` then `gh pr view <number>` (`--json body -q .body` for just the text)
+- **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration, not just a Phase 8 CI optimization — specifically to control Snowflake credit consumption from frequent local dev now that DuckDB is no longer free-tier local compute for dbt builds (see DuckDB-dropped-as-build-target decision in Key Architectural Decisions). Full-project `dbt build` stays appropriate before opening a PR.
 - **Repo audited clean (June 2026):** confirmed via `git ls-files` and `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty). Worth re-running periodically.
 - **One-off exports never get committed.** `.gitignore` includes `/games_export.csv` and `/scratch/` for throwaway dumps — delete when done or park in `/scratch/`.
 
@@ -417,7 +436,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-`.github/workflows/ci.yml` has **two jobs**. First: `pull_request` to `main`, `dbt build` against DuckDB after `mlb_pipeline.py --destination duckdb`. Second: `push` to `main` (post-merge), `dbt build` against real Snowflake via key-pair (reversed from WIF — see Snowflake CI Auth Notes above). DuckDB on every PR; Snowflake compute bounded to once per merge.
+`.github/workflows/ci.yml` currently has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
+
+**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — `state:modified+` bounds that cost, doesn't eliminate it. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt DuckDB-CLI-scratchpad target is optional, not assumed wanted.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate, not a leftover from before the Makefile existed):** `make dbt-build` assumes a local `.env` file (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` directly from GitHub Secrets instead. So both jobs' `working-directory: rays_analytics` + bare `dbt build` is the correct, intended pattern — don't "fix" this to call the Makefile target, it would break the job.
 
@@ -426,6 +447,8 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 **Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's Dagster asset checks land (superseding the standalone `dbt source freshness` task previously planned here).
 
 **Running under `SYSADMIN`, not scoped down (flagged July 2026):** broader than the job needs. A `CI_DEPLOYER` custom role (warehouse usage + schema-level create/write only) is a known follow-up, deprioritized behind the README/walkthrough and a baseball-question mart.
+
+**Design decided, not implemented (August 2026):** a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad access) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, CI-only) — replacing the current schema-only `RAW`/`DEV`/`PROD` split in one database.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -470,23 +493,7 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 #### Phase 4 — Ingestion (~1 week, slimmed for core path) ✅ COMPLETE
 
-**Resolved June 2026:** dlt over Openflow — see Key Architectural Decisions. No longer a blocking pause.
-
-**Core goal:** Replace `load_mlb_data.py` with a proper dlt pipeline writing directly into `RAYS_ANALYTICS.RAW`; add Statcast data via pybaseball; build staging models over dlt raw output; implement incremental loading. **No bronze/Iceberg layer in this pass.**
-
-Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
-
-**Closed out:** CI dual-job architecture (Snowflake-on-merge) — `fix/ci-snowflake-key-pair-auth` (PR #26) merged 2026-07-20, adding the Snowflake CI job on key-pair auth. Last Phase 4 blocker resolved.
-
-**Deferred, not blocking:**
-- Scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes) — punted, no target phase
-- Statcast/pybaseball resource not yet started — Dagster orchestration (Phase 5, re-scoped July 2026) is not a data-safety blocker for it (see the corrected cron-scheduling reasoning above), but Phase 5's asset checks are still the planned place for freshness alerting before Statcast ships
-
-**Key notes:**
-- Incremental loading needs a cursor column. `games` does NOT use `dlt.sources.incremental()` (see Key Architectural Decisions); Statcast will need the real cursor pattern.
-- Deliberately introduce a schema change and observe dlt/dbt source freshness response — not yet done
-
-**Bonus-track note (when revisited):** S3 + Iceberg + Snowflake Open Catalog bronze layer — dlt writes once to S3, Snowflake/DuckDB read from that location as separate engines. Setup: `ORGADMIN`-created Open Catalog account, S3 bucket, scoped IAM credentials. Single-writer discipline applies.
+**Goal:** Replace `load_mlb_data.py` with a dlt pipeline writing directly into `RAYS_ANALYTICS.RAW`, no bronze/Iceberg layer in this pass. Full history and completed-items lists: see CHANGELOG.md. Open follow-ups from this phase now live in Current Status, below.
 
 **Skills locked in (core):** Python-based ingestion, dlt resource/source/pipeline model, raw/staging layer pattern, merge write-disposition, destination-parameterized pipeline design, schema drift handling.
 
@@ -496,20 +503,15 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 #### Phase 5 — Orchestration and Observability (~6–9 hours, likely spanning multiple sessions) — CORE, re-scoped July 2026
 
-**Core goal (revised):** Self-hosted Dagster OSS replaces GitHub Actions cron as the production scheduler — see the Dagster decision in Key Architectural Decisions. GitHub Actions keeps its existing role as the PR/merge-time code-correctness gate (DuckDB build on PRs, Snowflake build on merge); that doesn't change.
+**Core goal:** Self-hosted Dagster OSS on a VPS via Docker Compose (see Orchestration Hosting decision in Key Architectural Decisions) replaces GitHub Actions cron as production scheduler; GitHub Actions keeps its PR/merge-time gate role.
 
-**Scope:**
-- Wrap the existing dlt `games` pipeline as a Dagster asset
-- Generate dbt model assets via `@dbt_assets` off `manifest.json` — one asset per dbt model, no DAG remodeling
-- Freshness checks via Dagster asset checks (configurable from dbt `meta` config in `schema.yml`), replacing the standalone `dbt source freshness` task previously planned
-- Alerting: email over Slack for a solo project — simpler, already reaches phone via Mail push, no new account/app to check. Elementary is no longer a Phase 5 dependency; Dagster's own asset checks + sensors cover the freshness-alerting use case natively. Elementary remains a possible separate future decision for dbt-test-specific anomaly detection/reporting beyond what Dagster gives.
-- A `launchd` LaunchAgent so the Dagster daemon survives Mac reboots automatically (see Key Architectural Decisions for the reboot-vs-extended-downtime distinction)
+**Scope:** stand up the four-service Compose stack + Tailscale sidecar on the VPS; wrap the `games` dlt pipeline and dbt models (`@dbt_assets` off `manifest.json`) as Dagster assets; add freshness checks (from dbt `meta` config) and email alerting (Elementary optional, not a dependency).
 
-**Known open item, not urgent:** even with Dagster running, there's currently no alerting for "run succeeded but data is wrong" (e.g., a clean run that pulled zero games, or stale/duplicate data) — only hard failures trigger a notification today (GitHub's default on-failure email). Requires actively writing freshness/volume/quality checks once Dagster is up; doesn't come for free with the migration.
+**Known open item:** no alerting yet for "run succeeded but data is wrong" (zero-row pulls, stale/duplicate data) — only hard failures notify today; needs its own checks once Dagster is up.
 
-**Bonus-track note:** dbt Projects on Snowflake remains a candidate to revisit for orchestration if Dagster ever proves insufficient, though the Dagster decision above is not expected to be revisited on a fixed timeline.
+**Bonus-track note:** dbt Projects on Snowflake stays pure platform-exploration curiosity, not a Dagster fallback plan — see Key Architectural Decisions.
 
-**Skills locked in (core):** Asset-based orchestration (Dagster OSS), `dagster-dbt` asset generation from `manifest.json`, asset checks, self-hosted daemon process management (`launchd`), scheduled runs, failure alerting, data observability.
+**Skills locked in (core):** Asset-based orchestration (Dagster OSS), `dagster-dbt` asset generation, asset checks, self-hosted daemon process management via Docker Compose on a VPS, Tailscale sidecar networking, scheduled runs, failure alerting, data observability.
 
 ---
 
@@ -554,15 +556,18 @@ Full completed-items lists (June and July 2026 sessions): see CHANGELOG.md.
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5 orchestration decision made and scoped (Dagster OSS, self-hosted) — implementation not yet started; `docs/update-claude-md-phase5-orchestration-decision` is a docs-only planning branch, no code changes.
+**Phase 4 complete.** Phase 5 re-scoped August 2026 (Dagster OSS on a VPS via Docker Compose, supersedes the Mac Mini/launchd plan) — implementation not started. DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
 
 **Next actions:**
-1. Set up Dagster OSS locally (`dagster-webserver` + `dagster-daemon` under `DAGSTER_HOME`, no Docker) and a `launchd` LaunchAgent for reboot survival
-2. Wrap the `games` dlt pipeline as a Dagster asset; generate dbt model assets via `@dbt_assets` off `manifest.json`
-3. Add Dagster asset checks for freshness (from dbt `meta` config) and email alerting
-4. Begin the Statcast/pybaseball resource — first real test of dlt's `incremental()` cursor pattern
+1. Decide VPS provider/region/instance size; stand up the four-service Compose stack + Tailscale sidecar
+2. Wrap the `games` dlt pipeline and dbt models as Dagster assets (`@dbt_assets` off `manifest.json`)
+3. Add Dagster asset checks for freshness and email alerting
+4. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
 5. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
-**Deferred, no target phase:** scoping the CI job's Snowflake role down from `SYSADMIN` to a dedicated `CI_DEPLOYER` role (see CI Architecture Notes).
+**Deferred, no target phase:**
+- `CI_DEPLOYER` role-scoping and CI's post-DuckDB shape — both fully designed, see CI Architecture Notes, not implemented
+- Next data source will need dlt's real `incremental()` cursor pattern (`games` doesn't use it)
+- Deliberately introduce a schema change and observe dlt/dbt source freshness response — not yet done
 
 Full session-by-session history: see CHANGELOG.md.
