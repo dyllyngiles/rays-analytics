@@ -6,5 +6,6 @@ dependencies = [
     "dbt-duckdb",
     "dbt-snowflake==1.11.4",
     "dlt[duckdb,snowflake]>=1.28.1",
+    "marimo>=0.23.16",
     "requests",
 ]
