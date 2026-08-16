@@ -324,12 +324,17 @@ Note: `chore/split-claude-md-changelog` remains a separate open branch, not touc
 
 **Documentation-only session — no code, Dockerfiles, `profiles.yml`/`ci.yml`/Makefile changes, or VPS provisioning.** Where a decision implies future setup work, it's captured as "decided, not yet implemented," matching the existing `CI_DEPLOYER` tracking pattern.
 
-**Flagged, not resolved this session:** dropping DuckDB as a dbt build target leaves `ci.yml`'s DuckDB-on-every-PR job, `profiles.yml`'s `dev_duck` target, and the `make dbt-build-duckdb` Makefile target all describing the old dual-target pattern. This prompt was explicitly documentation-only and didn't address what CI should do instead (still run a DuckDB smoke-build on PRs? drop DuckDB from CI entirely and rely on Snowflake dev builds?) — flagged as an open question for the next session rather than guessed at here.
+**Resolved later this session — CI's response to dropping DuckDB as a build target (decided, not yet implemented):**
+- **PR-time job:** changes from a DuckDB build to a Snowflake dev-target build — `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV` under `DEV_ROLE` (the two-database split decided above). This makes every PR spend real, small Snowflake credits where it previously cost nothing; `state:modified+` exists specifically to bound that cost to changed models and their dependents, not to eliminate it.
+- **Merge-to-main job:** unchanged in shape — full `dbt build` against `RAYS_ANALYTICS` (prod) under the scoped `CI_DEPLOYER` role.
+- **`profiles.yml`'s `dev_duck` target is removed, not kept as a fallback.** Reviving it for CI would reintroduce the dialect-portability/split-brain problem dropping DuckDB as a build target was meant to solve — deliberately documented so it doesn't get quietly re-added later.
+- **`make dbt-build-duckdb` is removed** as a dbt-build Makefile target. A simple "open the DuckDB CLI for scratchpad queries" target is a separate, much simpler target with no dbt invocation — noted as optional, not assumed wanted.
+- Still documentation-only: no actual `ci.yml`/`profiles.yml`/Makefile edits this session, matching the "decided, not yet implemented" pattern used elsewhere in this doc.
 
 **Active branch:** `docs/architecture-session-vps-orchestration-duckdb-dropped` — docs-only, no code changes, same pattern as prior `docs/update-claude-md-phase*` branches.
 
 **Next actions:**
-1. Resolve the flagged CI/Makefile/profiles.yml question above, then implement it
+1. Implement the resolved CI design above: update `ci.yml`, `profiles.yml` (remove `dev_duck`), and the `Makefile` (remove `dbt-build-duckdb`)
 2. Decide VPS provider/region/instance size (Hetzner leading candidate, not committed)
 3. Stand up the four-service Docker Compose stack + Tailscale sidecar on the chosen VPS
 4. Wrap the `games` dlt pipeline as a Dagster asset; generate dbt model assets via `@dbt_assets` off `manifest.json`
