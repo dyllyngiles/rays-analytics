@@ -20,7 +20,7 @@ I started this project with dbt and BI experience but no hands-on modern cloud w
 
 **Why I'm actually doing this project:** Curiosity and enjoyment. Job marketability is real and welcome but not the filter for what's worth exploring — don't gate discussing/prototyping an idea behind "does this earn its place." That scrutiny is for what becomes permanent, maintained stack infrastructure. Default to following interesting tangents.
 
-That said, I still want honest pushback when something is actually unsound, outdated, or solving a problem that doesn't exist — different from ROI-gating, and I want it regardless of how fun the idea sounded. Real constraint I care about: not spending a lot of money. Flag other practical parameters as they come up — ongoing maintenance burden, new credentials meaning new security surface area, and the 16GB RAM ceiling.
+That said, I still want honest pushback when something is actually unsound, outdated, or solving a problem that doesn't exist — different from ROI-gating, regardless of how fun the idea sounded. Real constraint I care about: not spending a lot of money. Flag other practical parameters as they come up — maintenance burden, new credentials meaning new security surface, the 16GB RAM ceiling.
 
 I'm also deliberately going deep on platform-specific exploration (Query Profile, role hierarchy, catalog mechanics) on its own terms, not just when strictly needed for the build. Same applies to DuckDB once Phase 4 work resumes.
 
@@ -113,7 +113,7 @@ Roadmap is split into two tracks so the application timeline isn't gated by plat
 - Snowflake Semantic Views (GA March 2026) — warehouse-native semantic layer, zero extra cost
 - Snowflake Cortex Analyst — NL querying over semantic views, ~$5–15/month at hobby scale
 
-**Estimated monthly cost: ~$65–95/month + an undecided VPS cost** — Snowflake ~$35–55 (raised from ~$30–40 now that DuckDB is dropped as a dbt build target), Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, rest free. **VPS provider/size not yet decided** — not estimated here.
+**Estimated monthly cost: ~$89–119/month** — Snowflake ~$35–55 (raised from ~$30–40 now that DuckDB is dropped as a dbt build target), Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, VPS ~$24 (DigitalOcean droplet), rest free.
 
 ---
 
@@ -133,7 +133,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **Dagster Cloud Solo/Starter re-confirmed disqualifying (decided August 2026):** ~49 dbt-model assets under per-credit billing runs ~$60/month in credits alone.
 
-**Orchestration hosting: self-hosted Dagster OSS on a VPS via Docker Compose, not the Mac Mini (decided August 2026, supersedes the Mac Mini/launchd plan):** always-on/remote-reachable Mac Mini hosting proved impractical in testing. Four services (webserver, daemon, user-code gRPC server, Postgres) + Tailscale sidecar. **VPS provider not yet chosen.** Full reasoning: see CHANGELOG.md.
+**Orchestration hosting: self-hosted Dagster OSS on a VPS via Docker Compose, not the Mac Mini (decided August 2026, supersedes the Mac Mini/launchd plan):** Mac Mini root cause is FileVault vs. unattended-reboot SSH access, not just "impractical." Four services (webserver, daemon, user-code gRPC server, Postgres) + Tailscale sidecar. **VPS: DigitalOcean, NYC3, Basic 2vCPU/4GB/80GB droplet, Ubuntu 24.04, ~$24/mo, x86_64 (`--platform linux/amd64` applies)** — dedicated Ed25519 key (`~/.ssh/rays_vps_ed25519`), backups add-on off (box is disposable/re-provisionable, state of record is Snowflake). Full reasoning incl. rejected providers: see CHANGELOG.md.
 
 **Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (June 2026, bonus track):** Open Catalog is managed Polaris — free, CI-reachable, open-source-first.
 
@@ -192,6 +192,8 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 | Airflow | Common in AE postings but not required — concepts transfer from Dagster/Prefect |
 | Delta Lake | Bronze-layer dedup alternative, considered Aug 2026; added complexity not worth it, lower job-market signal than the Iceberg bonus track |
 | AWS-native orchestration hosting (EC2/ECS/RDS) | Considered Aug 2026; costlier/over-complex for a solo ~daily pipeline |
+| Hetzner (VPS) | US region pricing (Ashburn/Hillsboro) runs ~2-3x EU rate as of Aug 2026 — most expensive option checked, not cheapest; don't re-default on EU-reputation cost assumptions |
+| Mac Mini (VPS substitute) | Root cause: FileVault vs. auto-login conflicts with unattended reboot — no reliable SSH/network access pre-login without a human present |
 
 
 *Docker itself is no longer in this table — see Key Environment Decisions (reversed August 2026).*
@@ -253,7 +255,7 @@ ALTER USER DBT_SERVICE_USER SET RSA_PUBLIC_KEY='<paste_base64_here>';
 
 ### Snowflake CI Auth Notes
 
-**Decision (reversed July 2026):** the Snowflake-on-merge CI job authenticates via key-pair, not WIF. The "PR merged May 20, 2026" claim was wrong — `dbt-labs/dbt-adapters` PR #1316 ("Adding support for Snowflake Workload Identity Federation") is still open, open since September 2025, blocked on a maintainer requirement for ongoing integration-test infrastructure. The dbt-snowflake v1.12.0 milestone shows it open at 45% complete. Reversed to key-pair — both dlt and dbt now use key-pair in CI, no asymmetry.
+**Decision (reversed July 2026):** the Snowflake-on-merge CI job authenticates via key-pair, not WIF. The "PR merged May 20, 2026" claim was wrong — `dbt-labs/dbt-adapters` PR #1316 (Snowflake WIF support) is still open since September 2025, blocked on a maintainer requirement for integration-test infra (dbt-snowflake v1.12.0 milestone shows it 45% complete). Reversed to key-pair — dlt and dbt both use key-pair in CI now, no asymmetry.
 
 **`RAYS_ANALYTICS_CI_SERVICE` setup, completed this session:**
 - Authentication policy `WIF_GITHUB_ONLY` (in `RAYS_ANALYTICS.RAW`) stays attached and ACTIVE — `AUTHENTICATION_METHODS = [ALL]`, not restricted to WORKLOAD_IDENTITY, so key-pair auth is permitted under it. Left attached rather than removed: dormant, ready if WIF ships later.
@@ -279,9 +281,9 @@ Private key: `~/.ssh/ci_service_user_rsa_key_p8.pem` (chmod 600), separate from 
       threads: 4
 ```
 
-Mirrors the `dev` Snowflake target, but authenticates as `RAYS_ANALYTICS_CI_SERVICE` (the CI service user) with its own key path, instead of `DBT_SERVICE_USER`.
+Mirrors `dev`, but authenticates as `RAYS_ANALYTICS_CI_SERVICE` with its own key path instead of `DBT_SERVICE_USER`.
 
-**Gotchas carried over from the original WIF setup, still relevant to this user:**
+**Gotchas carried over from the original WIF setup:**
 - `CREATE USER` / `CREATE AUTHENTICATION POLICY` are `SECURITYADMIN`/`USERADMIN` territory, not `SYSADMIN`.
 - `DEFAULT_ROLE` on `CREATE USER` doesn't grant the role — needs an explicit `GRANT ROLE ... TO USER`.
 - `AUTHENTICATION POLICY` is schema-scoped.
@@ -314,7 +316,7 @@ PUBLIC — implicit floor every role gets
 | `SECURITYADMIN` (and its child `USERADMIN`) | Identity & access | Users, roles, grants, authentication policies, network policies |
 | `ACCOUNTADMIN` | Account-level only | Billing, account parameters, replication, org settings |
 
-Litmus test: *who/what can authenticate* → `SECURITYADMIN`. *Data/compute objects* → `SYSADMIN`. `ACCOUNTADMIN` inherits both, which is why it "just works" regardless of domain — and why it's worth resisting as a default, since it papers over which branch actually owns a task.
+Litmus test: *who/what can authenticate* → `SECURITYADMIN`. *Data/compute objects* → `SYSADMIN`. `ACCOUNTADMIN` inherits both, which is why it "just works" regardless of domain — worth resisting as a default since it papers over which branch owns a task.
 
 **Default role decision:** `SYSADMIN` is the default Snowsight role going forward, not `ACCOUNTADMIN`. Set via:
 ```sql
@@ -322,7 +324,7 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 ```
 `ACCOUNTADMIN` is reserved for genuinely account-level tasks: resource monitors, billing, rare service-account/user management. Full four-role rotation is enterprise ceremony not worth it solo — two roles is right-sized here.
 
-**The gotcha (bit three times — twice in Phase 3, once in Phase 4):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at three object levels — table, warehouse, schema — each with a distinct error. Full story with exact error text: see CHANGELOG.md.
+**The gotcha (bit three times — twice in Phase 3, once in Phase 4):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at three object levels (table, warehouse, schema), each a distinct error — full text: see CHANGELOG.md.
 
 **Fix, any case:** grant the missing privilege explicitly, run as the object's owning role:
 ```sql
@@ -330,7 +332,7 @@ GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
 GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
 GRANT CREATE TABLE ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SYSADMIN;
 ```
-Better long-term fix: switch the Snowsight role selector to `SYSADMIN` *before* any manual UI work, so objects are owned right from creation. One upside of the schema-level grant: `SYSADMIN` now owns whatever it creates in `RAW` going forward — no more retroactive grants needed there.
+Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation. The schema-level grant means `SYSADMIN` now owns whatever it creates in `RAW` going forward.
 
 ---
 
@@ -342,15 +344,7 @@ Bonus-track, not actively worked. Architecture (when revisited): raw data lands 
 
 ### Snowsight Navigation (as of June 2026)
 
-Snowflake reorganized nav into top-level categories: Projects, Ingestion, Transformation, AI & ML, Monitoring, Marketplace, Catalog, Data sharing, Governance & security, Compute, Admin.
-
-Confirmed mappings (old → new):
-- **Data → Databases** → **Catalog → Database Explorer**
-- **dbt Projects** → **Transformation → dbt projects** (not nested under Workspaces)
-- **Query History**/Query Profile stayed put: **Monitoring → Query History**
-- **SQL editor:** Projects → Workspaces (renamed from Worksheets, April 20, 2026; legacy Worksheets removed June 22, 2026)
-
-**Caveat:** this UI shifts often enough that exact paths shouldn't be trusted long-term without a re-check. Treat as "true as of June 2026," not permanent.
+Nav reorganized into: Projects, Ingestion, Transformation, AI & ML, Monitoring, Marketplace, Catalog, Data sharing, Governance & security, Compute, Admin. Key moves: Databases → Catalog → Database Explorer; dbt Projects → Transformation → dbt projects; Query History/Profile unchanged under Monitoring; SQL editor is Projects → Workspaces (renamed from Worksheets, removed June 22 2026). **Caveat:** shifts often — treat as "true as of June 2026," re-check before trusting exact paths long-term.
 
 ---
 
@@ -436,11 +430,11 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-`.github/workflows/ci.yml` currently has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
+`.github/workflows/ci.yml` has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
 
-**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — `state:modified+` bounds that cost, doesn't eliminate it. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt DuckDB-CLI-scratchpad target is optional, not assumed wanted.
+**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — bounded, not eliminated. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt scratchpad target is optional, not assumed wanted.
 
-**Why `ci.yml` doesn't call `make dbt-build` (deliberate, not a leftover from before the Makefile existed):** `make dbt-build` assumes a local `.env` file (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` directly from GitHub Secrets instead. So both jobs' `working-directory: rays_analytics` + bare `dbt build` is the correct, intended pattern — don't "fix" this to call the Makefile target, it would break the job.
+**Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
 **Snowflake job steps:** writes `SNOWFLAKE_PRIVATE_KEY` to `$RUNNER_TEMP/ci_key.pem` (chmod 600, never logged), generates `profiles.yml` with `user`/`account` from Secrets and `role`/`database`/`warehouse`/`schema` hardcoded (non-sensitive), runs `dbt build`. No `id-token: write` — key-pair doesn't use OIDC.
 
@@ -556,10 +550,10 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5 re-scoped August 2026 (Dagster OSS on a VPS via Docker Compose, supersedes the Mac Mini/launchd plan) — implementation not started. DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+**Phase 4 complete.** Phase 5 re-scoped August 2026 (Dagster OSS on a VPS via Docker Compose, supersedes the Mac Mini/launchd plan) — droplet provisioned, connectivity confirmed, hardened (non-root user, key-only auth, ufw). DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
 
 **Next actions:**
-1. Decide VPS provider/region/instance size; stand up the four-service Compose stack + Tailscale sidecar
+1. Install Docker + Docker Compose on the droplet; stand up the four-service Compose stack + Tailscale sidecar
 2. Wrap the `games` dlt pipeline and dbt models as Dagster assets (`@dbt_assets` off `manifest.json`)
 3. Add Dagster asset checks for freshness and email alerting
 4. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
