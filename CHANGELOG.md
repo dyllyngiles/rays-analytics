@@ -4,6 +4,28 @@ Session-by-session build log for Rays Analytics. For current stack/state/next-ac
 
 ---
 
+### 2026-08-16 — Phase 5: VPS provider decision
+
+Walked through the VPS provider decision live rather than defaulting to Hetzner as previously assumed. Findings:
+
+- Hetzner's US region pricing (Ashburn) is actually the most expensive option checked, not the cheapest — the EU reputation doesn't hold for US-hosted instances.
+- A live DRAM/memory shortage (AI datacenter demand pulling global supply) is pushing up pricing across the board right now — Hetzner took a ~37% hike in April 2026, Raspberry Pi 5 pricing jumped from ~$70 to $85-125 in two months, and AWS/Azure/GCP are expected to follow with smaller increases in H2 2026. Ruled out the Raspberry Pi self-host idea on cost for this reason.
+- Considered and rejected: Oracle Cloud Always Free (capacity/signup risk not worth the time cost), Contabo (viable, ~$5-7/mo, but chose reliability over marginal savings), Fly.io/Railway/Render/Cloud Run (wrong architectural shape — built for scale-to-zero, not an always-on Dagster daemon), AWS EC2 free trial (time-boxed to Dec 31 2026, not a real long-term option).
+- Re-examined self-hosting on the Mac Mini one more time before closing the door for good. Root-caused the actual blocker as the FileVault/auto-login unattended-reboot conflict — see CLAUDE.md gotchas. Confirmed the door stays closed.
+- Decision: DigitalOcean, NYC3, Basic 2vCPU/4GB Droplet, dedicated SSH key. Rationale tied to timeline as much as architecture — season ends October 2026, so this VPS has a ~2-month intentional runway. Optimized for least friction over marginal monthly savings given that horizon, rather than the multi-year cost analysis the earlier provider comparisons implied.
+
+Next: droplet provisioning + SSH hardening (non-root user, ufw, key-only auth).
+
+---
+
+### 2026-08-16 — Phase 5: droplet provisioned and hardened
+
+Droplet stood up on the DigitalOcean plan decided earlier this session: SSH key pair generated, droplet provisioned, connectivity confirmed, then hardened (non-root user, key-only auth, ufw).
+
+Next: install Docker + Docker Compose, stand up the four-service Compose stack + Tailscale sidecar.
+
+---
+
 ## Extended rationale for settled architectural decisions
 
 Full reasoning and alternatives-considered detail for decisions CLAUDE.md now only summarizes in 1–2 sentences.
