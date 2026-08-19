@@ -92,19 +92,9 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 Roadmap is split into two tracks so the application timeline isn't gated by platform-depth exploration that's fun but not required.
 
-**Core path (apply-ready, collapsed timeline):**
-- Phase 4, slimmed: dlt → Snowflake `RAW` directly, no bronze/Iceberg layer
-- Phase 5, slimmed: GitHub Actions with an explicit scheduled dependency between loader and `dbt build`, no orchestrator bake-off
-- Phase 6, elevated: MetricFlow + Snowflake Semantic Views are core, not optional — the strongest differentiator. Cube's necessity is being reconsidered.
-- Phase 8, pulled forward: README + walkthrough
-- New, low-effort: a public self-serve demo — Evidence's Universal SQL (DuckDB-WASM) over exported Parquet snapshots, deployed as a static GitHub Pages site. Zero backend/cost/credentials.
+**Core path (apply-ready, collapsed timeline):** Phase 4 slimmed (dlt → Snowflake `RAW` directly, no bronze/Iceberg); Phase 6 elevated (MetricFlow + Snowflake Semantic Views are core, not optional); Phase 8 pulled forward (README + walkthrough); new low-effort public self-serve demo via Evidence's Universal SQL (DuckDB-WASM) over Parquet on GitHub Pages, zero backend/cost. Phase 5 orchestration has since grown beyond its original "slimmed, no bake-off" framing — see Phase 5 below and Key Architectural Decisions.
 
-**Bonus / platform-depth track (curiosity-driven, no deadline):**
-- Bronze layer: S3 + Iceberg + Snowflake Open Catalog, future self-hosted Polaris/Lakekeeper experiment
-- Orchestration bake-off: Dagster OSS vs. Prefect vs. dbt Projects on Snowflake
-- Deep Snowflake exploration: Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit
-- Phase 7 AI/MCP layer, including a MotherDuck Dives sandbox experiment
-- Self-serve BI tool decision: Lightdash (point-and-click, needs Docker) vs. Metabase (no Docker, metrics live outside dbt)
+**Bonus / platform-depth track (curiosity-driven, no deadline):** Bronze layer (S3 + Iceberg + Snowflake Open Catalog, future self-hosted Polaris/Lakekeeper); deep Snowflake exploration (Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit); Phase 7 AI/MCP layer incl. a MotherDuck Dives sandbox; self-serve BI tool decision (Lightdash vs. Metabase).
 
 ---
 
@@ -171,9 +161,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **Snowflake Semantic Views:** GA March 2026, zero extra cost, Snowflake-only (matches this stack's Snowflake-only production posture).
 
-**dbt/Fivetran merger:** completed June 2026; dbt Core stays Apache 2.0, no impact on this stack.
-
-**Prefect/Dagster acquisition (noted July 2026):** both stay Apache 2.0/self-hostable — doesn't change the Dagster OSS decision, just vendor-risk framing to watch.
+**dbt/Fivetran merger / Prefect/Dagster acquisition (2026):** both stay Apache 2.0/self-hostable — no impact on stack choices, just vendor-risk framing to watch.
 
 **Claude Code reads `.env` directly when generating config that references it (flagged August 2026):** confirmed while wiring Postgres credentials into the Compose stack. Explicitly instruct it not to touch `.env` per task; treat anything it read as exposed. Full narrative: see CHANGELOG.md.
 
@@ -328,13 +316,7 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 
 **The gotcha (bit three times — twice in Phase 3, once in Phase 4):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at three object levels (table, warehouse, schema), each a distinct error — full text: see CHANGELOG.md.
 
-**Fix, any case:** grant the missing privilege explicitly, run as the object's owning role:
-```sql
-GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
-GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
-GRANT CREATE TABLE ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SYSADMIN;
-```
-Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation. The schema-level grant means `SYSADMIN` now owns whatever it creates in `RAW` going forward.
+**Fix, any case:** `GRANT <privilege> ON <object> TO ROLE SYSADMIN`, run as the object's owning role. Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation.
 
 ---
 
@@ -346,7 +328,7 @@ Bonus-track, not actively worked. Architecture (when revisited): raw data lands 
 
 ### Snowsight Navigation (as of June 2026)
 
-Nav reorganized into: Projects, Ingestion, Transformation, AI & ML, Monitoring, Marketplace, Catalog, Data sharing, Governance & security, Compute, Admin. Key moves: Databases → Catalog → Database Explorer; dbt Projects → Transformation → dbt projects; Query History/Profile unchanged under Monitoring; SQL editor is Projects → Workspaces (renamed from Worksheets, removed June 22 2026). **Caveat:** shifts often — treat as "true as of June 2026," re-check before trusting exact paths long-term.
+Databases → Catalog → Database Explorer; dbt Projects → Transformation → dbt projects; SQL editor is Projects → Workspaces (renamed from Worksheets). **Caveat:** shifts often — treat as "true as of June 2026," re-check before trusting exact paths long-term.
 
 ---
 
@@ -434,7 +416,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 `.github/workflows/ci.yml` has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
 
-**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — bounded, not eliminated. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt scratchpad target is optional, not assumed wanted.
+**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (bounded, not eliminated, credit spend per PR). Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target and `make dbt-build-duckdb` **removed, not kept as fallback** — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
