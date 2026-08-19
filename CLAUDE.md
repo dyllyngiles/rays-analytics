@@ -157,9 +157,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **dbt Core vs dbt Fusion vs dbt Core v2.0:** v2.0 (Fusion, Apache 2.0) is alpha; v1.11.x stays the daily driver until Phase 8.
 
-**Snowflake-native dbt:** GA November 2025, no added licensing cost beyond warehouse credits.
-
-**Snowflake Semantic Views:** GA March 2026, zero extra cost, Snowflake-only (matches this stack's Snowflake-only production posture).
+**Snowflake-native dbt (GA Nov 2025) / Snowflake Semantic Views (GA Mar 2026):** both zero extra cost beyond warehouse credits, Semantic Views Snowflake-only (matches this stack's Snowflake-only posture).
 
 **dbt/Fivetran merger / Prefect/Dagster acquisition (2026):** both stay Apache 2.0/self-hostable — no impact on stack choices, just vendor-risk framing to watch.
 
@@ -322,13 +320,13 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 
 ### Bronze Layer & Iceberg Catalog Notes
 
-Bonus-track, not actively worked. Architecture (when revisited): raw data lands in S3 (us-east-2) as Iceberg tables, cataloged through Snowflake Open Catalog, with Snowflake and DuckDB both reading the same physical location as separate engines. Deferred, not rejected — self-hosted Polaris is a low-friction switch later since Open Catalog runs the identical software. Full setup requirements, cost, single-writer rule, and catalog comparison: see CHANGELOG.md.
+Bonus-track, not actively worked. Architecture (when revisited): S3 (us-east-2) Iceberg tables cataloged via Snowflake Open Catalog, Snowflake/DuckDB reading the same location as separate engines. Deferred, not rejected — self-hosted Polaris is a low-friction switch later (same software). Full details: see CHANGELOG.md.
 
 ---
 
 ### Snowsight Navigation (as of June 2026)
 
-Databases → Catalog → Database Explorer; dbt Projects → Transformation → dbt projects; SQL editor is Projects → Workspaces (renamed from Worksheets). **Caveat:** shifts often — treat as "true as of June 2026," re-check before trusting exact paths long-term.
+Databases → Catalog → Database Explorer; SQL editor is Projects → Workspaces (renamed from Worksheets). **Caveat:** shifts often, re-check before trusting long-term.
 
 ---
 
@@ -406,9 +404,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - `git config --global fetch.prune true` is set — merged feature branches don't linger as stale tracking refs
 - GitHub has "automatically delete head branches" enabled — local branches still need an explicit `git branch -d` after
 - Pull past PR descriptions with `gh pr list --state all` then `gh pr view <number>` (`--json body -q .body` for just the text)
-- **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration, not just a Phase 8 CI optimization — specifically to control Snowflake credit consumption from frequent local dev now that DuckDB is no longer free-tier local compute for dbt builds (see DuckDB-dropped-as-build-target decision in Key Architectural Decisions). Full-project `dbt build` stays appropriate before opening a PR.
-- **Repo audited clean (June 2026):** confirmed via `git ls-files` and `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty). Worth re-running periodically.
-- **One-off exports never get committed.** `.gitignore` includes `/games_export.csv` and `/scratch/` for throwaway dumps — delete when done or park in `/scratch/`.
+- **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration (not just Phase 8 CI) to control Snowflake credit spend now that DuckDB isn't free local compute (see DuckDB-dropped decision above). Full-project `dbt build` stays appropriate before opening a PR.
+- **Repo audited clean (June 2026)** via `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty) — worth re-running periodically.
+- **One-off exports never get committed** — `.gitignore` covers `/games_export.csv` and `/scratch/` for throwaway dumps.
 
 ---
 
@@ -434,7 +432,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted.
 
-**Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required.
+**Dependency auditing:** `uv audit` runs as a CI step (PR job only). Built into uv 0.10.12+.
 
 **`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit on a docs-only PR — `cryptography`/`msgpack`). Fix is a narrow lockfile bump:
 ```bash
@@ -442,6 +440,8 @@ uv lock --upgrade-package cryptography --upgrade-package msgpack
 uv sync --locked
 ```
 Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
+
+**`sqlparse` CVEs suppressed, not fixed (August 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 
