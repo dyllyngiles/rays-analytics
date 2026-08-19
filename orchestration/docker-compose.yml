@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dagster-postgres
+    env_file:
+      - ../.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  user-code:
+    build:
+      context: ..
+      dockerfile: orchestration/Dockerfile.user_code
+    container_name: dagster-user-code
+    image: rays-analytics-user-code
+    env_file:
+      - ../.env
+    environment:
+      DAGSTER_CURRENT_IMAGE: rays-analytics-user-code
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  dagster-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.dagster
+    container_name: dagster-webserver
+    image: rays-analytics-dagster
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/opt/dagster/dagster_home/workspace.yaml"]
+    env_file:
+      - ../.env
+    network_mode: service:tailscale
+    depends_on:
+      - postgres
+      - user-code
+      - tailscale
+    restart: unless-stopped
+
+  dagster-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile.dagster
+    container_name: dagster-daemon
+    image: rays-analytics-dagster
+    command: ["dagster-daemon", "run"]
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+      - user-code
+    restart: unless-stopped
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: rays-dagster
+    env_file:
+      - ../.env
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_HOSTNAME: rays-dagster
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  tailscale_state:
