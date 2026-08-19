@@ -9,3 +9,10 @@ dependencies = [
     "marimo>=0.23.16",
     "requests",
 ]
+
+[project.optional-dependencies]
+dagster = [
+    "dagster>=1.13.18",
+    "dagster-dbt>=0.29.18",
+    "dagster-postgres>=0.29.18",
+]
