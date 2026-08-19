@@ -26,6 +26,25 @@ Next: install Docker + Docker Compose, stand up the four-service Compose stack +
 
 ---
 
+### 2026-08-18 — Phase 5: VPS build, steps 1–6, first successful Dagster stack boot
+
+Continued from the droplet-provisioned-and-hardened session above, working straight through the locked build order (SSH key → droplet → hardening → Docker/Compose → four-service stack + Tailscale sidecar) to a first successful `docker compose up`. All five containers — `postgres`, `user-code`, `dagster-webserver`, `dagster-daemon`, `tailscale` — came up clean; the Tailscale sidecar joined the tailnet (`rays-dagster` visible in the admin console).
+
+Two real gotchas hit and fixed along the way:
+
+- **Tailscale sidecar needs explicit kernel networking.** The default `TS_USERSPACE` is enabled (userspace mode), which doesn't transparently extend to a sibling container attached via `network_mode: service:tailscale` — the webserver container couldn't reach the tailnet through it. Fix: explicit `TS_USERSPACE: "false"`, `/dev/net/tun` device mount, and `SYS_MODULE` added to `cap_add` in the Tailscale service definition.
+- **Build context path mismatch in `Dockerfile.user_code`.** The build context is repo root (`..`), not `orchestration/` — needed so the image can see `pyproject.toml`/`uv.lock` at the root. That means `COPY` paths for anything under `orchestration/` need the `orchestration/` prefix, easy to miss since the repo-root files copied earlier in the same Dockerfile don't need it. `COPY user_code/ ./user_code/` failed on the VPS; fixed to `COPY orchestration/user_code/ ./user_code/`. Fixed directly on the VPS first, then ported back into the repo and committed here.
+
+**New gotcha, worth its own note — Claude Code reads `.env` directly when generating config that references it.** Confirmed this session: while adding Postgres credentials to the Compose stack, Claude Code read and edited `.env` unprompted, pulling its contents into that session's context. Mitigation going forward: explicit "don't touch `.env`" instructions per task. Anything it touched this session should be treated as exposed — `TS_AUTHKEY` was rotated as a result.
+
+**Also worth a line:** `orchestration/` was left uncommitted after Claude Code generated it earlier in the session — caught by a `git status` check before it caused confusion, but a reminder to verify a commit actually landed rather than assume a `git push` shipped everything expected. The same uncommitted batch included `pyproject.toml`/`uv.lock`'s Dagster-extras restructuring (from the dependency-groups-vs-extras research) — now resolved along with everything else in the batch.
+
+Still open: Dagster UI reachability over the tailnet hasn't been manually verified end-to-end yet (browser test still pending). No real assets wired up yet — `definitions.py` is still the empty placeholder. `games` dlt pipeline and `@dbt_assets` off `manifest.json` not yet added.
+
+Next: verify Dagster UI access via Tailscale from a browser, then wrap the `games` dlt pipeline as a Dagster asset.
+
+---
+
 ## Extended rationale for settled architectural decisions
 
 Full reasoning and alternatives-considered detail for decisions CLAUDE.md now only summarizes in 1–2 sentences.

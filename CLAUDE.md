@@ -81,7 +81,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend — raised from ~$30–40 now that dbt builds against Snowflake exclusively |
 | Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target as of August 2026 |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
-| Orchestration | Dagster OSS (self-hosted, Docker Compose on a VPS) | Decided, not yet implemented | Tool chosen July 2026, VPS hosting decided August 2026 — supersedes the Mac Mini/launchd plan. GitHub Actions cron is still the only scheduler running today |
+| Orchestration | Dagster OSS (self-hosted, Docker Compose on a VPS) | Decided, not yet implemented | Tool chosen July 2026, VPS hosting decided August 2026 — supersedes the Mac Mini/launchd plan. nothing schedules production loads today — `ci.yml` runs on PR/push only, no cron |
 | Observability | Dagster asset checks | Decided, not yet implemented | Depends on Dagster setup above. Elementary now optional, future dbt-test-anomaly-detection decision only |
 | BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
 | Version control + CI | GitHub + GitHub Actions | **Running** | |
@@ -174,6 +174,8 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 **dbt/Fivetran merger:** completed June 2026; dbt Core stays Apache 2.0, no impact on this stack.
 
 **Prefect/Dagster acquisition (noted July 2026):** both stay Apache 2.0/self-hostable — doesn't change the Dagster OSS decision, just vendor-risk framing to watch.
+
+**Claude Code reads `.env` directly when generating config that references it (flagged August 2026):** confirmed while wiring Postgres credentials into the Compose stack. Explicitly instruct it not to touch `.env` per task; treat anything it read as exposed. Full narrative: see CHANGELOG.md.
 
 ---
 
@@ -550,10 +552,12 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5 re-scoped August 2026 (Dagster OSS on a VPS via Docker Compose, supersedes the Mac Mini/launchd plan) — droplet provisioned, connectivity confirmed, hardened (non-root user, key-only auth, ufw). DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+**Phase 4 complete.** Phase 5 steps 1–6 complete: SSH key generated, DigitalOcean droplet provisioned (NYC3, 104.131.162.113), hardened (non-root user `dyllyn`, root SSH login disabled, password auth disabled, ufw active with SSH-only), Docker + Compose installed, four-service Dagster stack + Tailscale sidecar written and successfully built/deployed. First `docker compose up` confirmed: all five containers (`postgres`, `user-code`, `dagster-webserver`, `dagster-daemon`, `tailscale`) running clean, Tailscale sidecar confirmed joined the tailnet (`rays-dagster` visible in the admin console). DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+
+**Still open:** Dagster UI reachability over the tailnet not yet manually verified end-to-end (browser test still pending — step 8). No real assets wired yet — `definitions.py` is still the empty placeholder. `games` dlt pipeline and `@dbt_assets` off `manifest.json` not yet added.
 
 **Next actions:**
-1. Install Docker + Docker Compose on the droplet; stand up the four-service Compose stack + Tailscale sidecar
+1. Verify Dagster UI access via Tailscale from a browser (step 8)
 2. Wrap the `games` dlt pipeline and dbt models as Dagster assets (`@dbt_assets` off `manifest.json`)
 3. Add Dagster asset checks for freshness and email alerting
 4. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
