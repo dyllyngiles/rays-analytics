@@ -81,7 +81,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend — raised from ~$30–40 now that dbt builds against Snowflake exclusively |
 | Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target as of August 2026 |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
-| Orchestration | Dagster OSS (self-hosted, Docker Compose on a VPS) | Decided, not yet implemented | Tool chosen July 2026, VPS hosting decided August 2026 — supersedes the Mac Mini/launchd plan. GitHub Actions cron is still the only scheduler running today |
+| Orchestration | Dagster OSS (self-hosted, Docker Compose on a VPS) | Decided, not yet implemented | Tool chosen July 2026, VPS hosting decided August 2026 — supersedes the Mac Mini/launchd plan. nothing schedules production loads today — `ci.yml` runs on PR/push only, no cron |
 | Observability | Dagster asset checks | Decided, not yet implemented | Depends on Dagster setup above. Elementary now optional, future dbt-test-anomaly-detection decision only |
 | BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
 | Version control + CI | GitHub + GitHub Actions | **Running** | |
@@ -92,19 +92,9 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 Roadmap is split into two tracks so the application timeline isn't gated by platform-depth exploration that's fun but not required.
 
-**Core path (apply-ready, collapsed timeline):**
-- Phase 4, slimmed: dlt → Snowflake `RAW` directly, no bronze/Iceberg layer
-- Phase 5, slimmed: GitHub Actions with an explicit scheduled dependency between loader and `dbt build`, no orchestrator bake-off
-- Phase 6, elevated: MetricFlow + Snowflake Semantic Views are core, not optional — the strongest differentiator. Cube's necessity is being reconsidered.
-- Phase 8, pulled forward: README + walkthrough
-- New, low-effort: a public self-serve demo — Evidence's Universal SQL (DuckDB-WASM) over exported Parquet snapshots, deployed as a static GitHub Pages site. Zero backend/cost/credentials.
+**Core path (apply-ready, collapsed timeline):** Phase 4 slimmed (dlt → Snowflake `RAW` directly, no bronze/Iceberg); Phase 6 elevated (MetricFlow + Snowflake Semantic Views are core, not optional); Phase 8 pulled forward (README + walkthrough); new low-effort public self-serve demo via Evidence's Universal SQL (DuckDB-WASM) over Parquet on GitHub Pages, zero backend/cost. Phase 5 orchestration has since grown beyond its original "slimmed, no bake-off" framing — see Phase 5 below and Key Architectural Decisions.
 
-**Bonus / platform-depth track (curiosity-driven, no deadline):**
-- Bronze layer: S3 + Iceberg + Snowflake Open Catalog, future self-hosted Polaris/Lakekeeper experiment
-- Orchestration bake-off: Dagster OSS vs. Prefect vs. dbt Projects on Snowflake
-- Deep Snowflake exploration: Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit
-- Phase 7 AI/MCP layer, including a MotherDuck Dives sandbox experiment
-- Self-serve BI tool decision: Lightdash (point-and-click, needs Docker) vs. Metabase (no Docker, metrics live outside dbt)
+**Bonus / platform-depth track (curiosity-driven, no deadline):** Bronze layer (S3 + Iceberg + Snowflake Open Catalog, future self-hosted Polaris/Lakekeeper); deep Snowflake exploration (Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit); Phase 7 AI/MCP layer incl. a MotherDuck Dives sandbox; self-serve BI tool decision (Lightdash vs. Metabase).
 
 ---
 
@@ -167,13 +157,11 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **dbt Core vs dbt Fusion vs dbt Core v2.0:** v2.0 (Fusion, Apache 2.0) is alpha; v1.11.x stays the daily driver until Phase 8.
 
-**Snowflake-native dbt:** GA November 2025, no added licensing cost beyond warehouse credits.
+**Snowflake-native dbt (GA Nov 2025) / Snowflake Semantic Views (GA Mar 2026):** both zero extra cost beyond warehouse credits, Semantic Views Snowflake-only (matches this stack's Snowflake-only posture).
 
-**Snowflake Semantic Views:** GA March 2026, zero extra cost, Snowflake-only (matches this stack's Snowflake-only production posture).
+**dbt/Fivetran merger / Prefect/Dagster acquisition (2026):** both stay Apache 2.0/self-hostable — no impact on stack choices, just vendor-risk framing to watch.
 
-**dbt/Fivetran merger:** completed June 2026; dbt Core stays Apache 2.0, no impact on this stack.
-
-**Prefect/Dagster acquisition (noted July 2026):** both stay Apache 2.0/self-hostable — doesn't change the Dagster OSS decision, just vendor-risk framing to watch.
+**Claude Code reads `.env` directly when generating config that references it (flagged August 2026):** confirmed while wiring Postgres credentials into the Compose stack. Explicitly instruct it not to touch `.env` per task; treat anything it read as exposed. Full narrative: see CHANGELOG.md.
 
 ---
 
@@ -326,25 +314,19 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 
 **The gotcha (bit three times — twice in Phase 3, once in Phase 4):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at three object levels (table, warehouse, schema), each a distinct error — full text: see CHANGELOG.md.
 
-**Fix, any case:** grant the missing privilege explicitly, run as the object's owning role:
-```sql
-GRANT SELECT ON TABLE RAYS_ANALYTICS.RAW.GAMES TO ROLE SYSADMIN;
-GRANT USAGE, OPERATE ON WAREHOUSE COMPUTE_WH TO ROLE SYSADMIN;
-GRANT CREATE TABLE ON SCHEMA RAYS_ANALYTICS.RAW TO ROLE SYSADMIN;
-```
-Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation. The schema-level grant means `SYSADMIN` now owns whatever it creates in `RAW` going forward.
+**Fix, any case:** `GRANT <privilege> ON <object> TO ROLE SYSADMIN`, run as the object's owning role. Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation.
 
 ---
 
 ### Bronze Layer & Iceberg Catalog Notes
 
-Bonus-track, not actively worked. Architecture (when revisited): raw data lands in S3 (us-east-2) as Iceberg tables, cataloged through Snowflake Open Catalog, with Snowflake and DuckDB both reading the same physical location as separate engines. Deferred, not rejected — self-hosted Polaris is a low-friction switch later since Open Catalog runs the identical software. Full setup requirements, cost, single-writer rule, and catalog comparison: see CHANGELOG.md.
+Bonus-track, not actively worked. Architecture (when revisited): S3 (us-east-2) Iceberg tables cataloged via Snowflake Open Catalog, Snowflake/DuckDB reading the same location as separate engines. Deferred, not rejected — self-hosted Polaris is a low-friction switch later (same software). Full details: see CHANGELOG.md.
 
 ---
 
 ### Snowsight Navigation (as of June 2026)
 
-Nav reorganized into: Projects, Ingestion, Transformation, AI & ML, Monitoring, Marketplace, Catalog, Data sharing, Governance & security, Compute, Admin. Key moves: Databases → Catalog → Database Explorer; dbt Projects → Transformation → dbt projects; Query History/Profile unchanged under Monitoring; SQL editor is Projects → Workspaces (renamed from Worksheets, removed June 22 2026). **Caveat:** shifts often — treat as "true as of June 2026," re-check before trusting exact paths long-term.
+Databases → Catalog → Database Explorer; SQL editor is Projects → Workspaces (renamed from Worksheets). **Caveat:** shifts often, re-check before trusting long-term.
 
 ---
 
@@ -422,9 +404,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - `git config --global fetch.prune true` is set — merged feature branches don't linger as stale tracking refs
 - GitHub has "automatically delete head branches" enabled — local branches still need an explicit `git branch -d` after
 - Pull past PR descriptions with `gh pr list --state all` then `gh pr view <number>` (`--json body -q .body` for just the text)
-- **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration, not just a Phase 8 CI optimization — specifically to control Snowflake credit consumption from frequent local dev now that DuckDB is no longer free-tier local compute for dbt builds (see DuckDB-dropped-as-build-target decision in Key Architectural Decisions). Full-project `dbt build` stays appropriate before opening a PR.
-- **Repo audited clean (June 2026):** confirmed via `git ls-files` and `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty). Worth re-running periodically.
-- **One-off exports never get committed.** `.gitignore` includes `/games_export.csv` and `/scratch/` for throwaway dumps — delete when done or park in `/scratch/`.
+- **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration (not just Phase 8 CI) to control Snowflake credit spend now that DuckDB isn't free local compute (see DuckDB-dropped decision above). Full-project `dbt build` stays appropriate before opening a PR.
+- **Repo audited clean (June 2026)** via `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty) — worth re-running periodically.
+- **One-off exports never get committed** — `.gitignore` covers `/games_export.csv` and `/scratch/` for throwaway dumps.
 
 ---
 
@@ -432,7 +414,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 `.github/workflows/ci.yml` has **two jobs**: `pull_request` runs `dbt build` against DuckDB; `push` to `main` runs `dbt build` against Snowflake via key-pair. **DuckDB-on-every-PR is superseded below — decided, not implemented.**
 
-**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE`, spending real (small) Snowflake credits per PR — bounded, not eliminated. Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target **removed, not a fallback** — reviving it reintroduces the dialect-portability problem dropping DuckDB solved. `make dbt-build-duckdb` **removed**; a separate no-dbt scratchpad target is optional, not assumed wanted.
+**CI's post-DuckDB shape — decided, not implemented (August 2026):** PR job moves to `dbt build --select state:modified+` against `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (bounded, not eliminated, credit spend per PR). Merge job unchanged in shape, switches to `RAYS_ANALYTICS`(prod)/`CI_DEPLOYER`. `dev_duck` target and `make dbt-build-duckdb` **removed, not kept as fallback** — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
@@ -450,7 +432,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted.
 
-**Dependency auditing:** `uv audit` runs as a CI step. Built into uv 0.10.12+, no additional install required.
+**Dependency auditing:** `uv audit` runs as a CI step (PR job only). Built into uv 0.10.12+.
 
 **`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit on a docs-only PR — `cryptography`/`msgpack`). Fix is a narrow lockfile bump:
 ```bash
@@ -458,6 +440,8 @@ uv lock --upgrade-package cryptography --upgrade-package msgpack
 uv sync --locked
 ```
 Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
+
+**`sqlparse` CVEs suppressed, not fixed (August 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 
@@ -550,10 +534,12 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5 re-scoped August 2026 (Dagster OSS on a VPS via Docker Compose, supersedes the Mac Mini/launchd plan) — droplet provisioned, connectivity confirmed, hardened (non-root user, key-only auth, ufw). DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+**Phase 4 complete.** Phase 5 steps 1–6 complete: SSH key generated, DigitalOcean droplet provisioned (NYC3, 104.131.162.113), hardened (non-root user `dyllyn`, root SSH login disabled, password auth disabled, ufw active with SSH-only), Docker + Compose installed, four-service Dagster stack + Tailscale sidecar written and successfully built/deployed. First `docker compose up` confirmed: all five containers (`postgres`, `user-code`, `dagster-webserver`, `dagster-daemon`, `tailscale`) running clean, Tailscale sidecar confirmed joined the tailnet (`rays-dagster` visible in the admin console). DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+
+**Still open:** Dagster UI reachability over the tailnet not yet manually verified end-to-end (browser test still pending — step 8). No real assets wired yet — `definitions.py` is still the empty placeholder. `games` dlt pipeline and `@dbt_assets` off `manifest.json` not yet added.
 
 **Next actions:**
-1. Install Docker + Docker Compose on the droplet; stand up the four-service Compose stack + Tailscale sidecar
+1. Verify Dagster UI access via Tailscale from a browser (step 8)
 2. Wrap the `games` dlt pipeline and dbt models as Dagster assets (`@dbt_assets` off `manifest.json`)
 3. Add Dagster asset checks for freshness and email alerting
 4. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
