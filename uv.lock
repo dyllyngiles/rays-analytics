@@ -430,6 +430,19 @@ wheels = [
 ]
 
 [[package]]
+name = "dagster-dlt"
+version = "0.29.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dagster" },
+    { name = "dlt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/d2/cfec9533f8c7fdb24c1a0c52e384fe839f3080f4aa7d20ed6dadc894fe8b/dagster_dlt-0.29.18.tar.gz", hash = "sha256:a75af2594902d8dae945382a53ad89673aa8027187db2e07976c70d0f9e8aa62", size = 232664, upload-time = "2026-08-14T19:29:06.86Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/36/290c3f846d43aaeb7614375c549b01d203b611e7dbdaccdc0eb115e4a853/dagster_dlt-0.29.18-py3-none-any.whl", hash = "sha256:5882264cd18e25a045bf16f9f4593ddab1492b4804e845f045f22c36f2f067b9", size = 21169, upload-time = "2026-08-14T19:29:05.823Z" },
+]
+
+[[package]]
 name = "dagster-pipes"
 version = "1.13.18"
 source = { registry = "https://pypi.org/simple" }
@@ -2049,6 +2062,7 @@ dependencies = [
 dagster = [
     { name = "dagster" },
     { name = "dagster-dbt" },
+    { name = "dagster-dlt" },
     { name = "dagster-postgres" },
 ]
 
@@ -2056,6 +2070,7 @@ dagster = [
 requires-dist = [
     { name = "dagster", marker = "extra == 'dagster'", specifier = ">=1.13.18" },
     { name = "dagster-dbt", marker = "extra == 'dagster'", specifier = ">=0.29.18" },
+    { name = "dagster-dlt", marker = "extra == 'dagster'", specifier = ">=0.29.18" },
     { name = "dagster-postgres", marker = "extra == 'dagster'", specifier = ">=0.29.18" },
     { name = "dbt-duckdb" },
     { name = "dbt-snowflake", specifier = "==1.11.4" },
