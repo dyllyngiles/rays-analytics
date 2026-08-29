@@ -8,6 +8,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --extra dagster
 
 COPY orchestration/user_code/ ./user_code/
+COPY pipelines/ ./pipelines/
 
 ENV PATH="/opt/dagster/app/.venv/bin:$PATH"
 

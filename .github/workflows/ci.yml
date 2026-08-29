@@ -57,7 +57,7 @@ jobs:
       - name: Load MLB data into DuckDB
         run: |
           source .venv/bin/activate
-          python mlb_pipeline.py --destination duckdb
+          python pipelines/mlb_games.py --destination duckdb
         env:
           DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
 
