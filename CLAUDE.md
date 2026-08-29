@@ -137,7 +137,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **Why `games` doesn't use dlt's `incremental()` (June 2026):** the schedule endpoint has no true modified-since cursor, so full-season re-pull + `merge` on `game_pk` is used instead — won't hold once a higher-volume, real-cursor source is added.
 
-**dlt pipeline destination is parameterized (June 2026):** `mlb_pipeline.py` takes `--destination duckdb|snowflake` (default `duckdb`) so DuckDB refreshes stay free while Snowflake spend is opt-in.
+**dlt pipeline destination is parameterized (June 2026):** `pipelines/mlb_games.py` takes `--destination duckdb|snowflake` (default `duckdb`) so DuckDB refreshes stay free while Snowflake spend is opt-in.
 
 **DuckDB dropped as a dbt build target (decided August 2026):** dbt builds only against Snowflake now; DuckDB demoted to an ad hoc scratchpad — the multi-engine goal never paid for itself at this size. CI's response: see CI Architecture Notes.
 
@@ -362,7 +362,8 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 ~/projects/rays-analytics/     ← project root, Python scripts, git repo
   .venv/                       ← venv (repo root, NOT in rays_analytics/)
   pyproject.toml, uv.lock      ← dependencies
-  mlb_pipeline.py              ← dlt pipeline, MLB Stats API → DuckDB/Snowflake (--destination flag)
+  pipelines/
+    mlb_games.py                ← dlt pipeline, MLB Stats API → DuckDB/Snowflake (--destination flag)
   dev.duckdb                   ← local DuckDB file (gitignored)
   .env                         ← Snowflake creds shared by dbt + dlt (gitignored)
   publish_docs.sh              ← publishes dbt docs to GitHub Pages
@@ -379,7 +380,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 ### Data Model
 
 - **Source:** MLB Stats API (no auth required)
-- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake — populated by `mlb_pipeline.py` (`--destination snowflake`), owned by `SYSADMIN`. Phase 3 manual-CSV-stopgap table fully retired.
+- **Raw table:** `RAYS_ANALYTICS.RAW.GAMES` in Snowflake — populated by `pipelines/mlb_games.py` (`--destination snowflake`), owned by `SYSADMIN`. Phase 3 manual-CSV-stopgap table fully retired.
 - **Rays team ID:** 139
 - **Seasons loaded:** 2022–2026 (~740 completed games; 162 each for 2022–2025, 92 for the still-in-progress 2026 season, growing run-over-run)
 - **Star schema:** stg_games → dim_teams, dim_venues, fct_games

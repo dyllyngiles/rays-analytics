@@ -1,15 +1,19 @@
 import argparse
 import os
+from collections.abc import Iterator
+from datetime import date
 
 import dlt
 import requests
+from dlt.extract import DltResource
 
+CURRENT_SEASON = date.today().year
 RAYS_TEAM_ID = 139
 COMPLETED_STATUSES = {"Final", "Completed Early"}
 
 
 def get_rays_schedule(season: int) -> list:
-    """Pull Rays game schedule for a given season. Unchanged from load_mlb_data.py."""
+    """Pull Rays game schedule for a given MLB season from the Stats API."""
     url = "https://statsapi.mlb.com/api/v1/schedule"
     params = {"teamId": RAYS_TEAM_ID, "season": season, "sportId": 1, "gameType": "R"}
     response = requests.get(url, params=params, timeout=30)
@@ -18,12 +22,12 @@ def get_rays_schedule(season: int) -> list:
 
 
 @dlt.resource(name="games", write_disposition="merge", primary_key="game_pk")
-def games(seasons: list[int]):
+def games(seasons: list[int]) -> Iterator[dict]:
     for season in seasons:
         print(f"Fetching {season} Rays schedule...")
         loaded = 0
-        for date in get_rays_schedule(season):
-            for game in date.get("games", []):
+        for game_date in get_rays_schedule(season):
+            for game in game_date.get("games", []):
                 if game["status"]["detailedState"] not in COMPLETED_STATUSES:
                     continue  # skip Scheduled / In Progress / Postponed
                 loaded += 1
@@ -45,9 +49,19 @@ def games(seasons: list[int]):
 
 
 @dlt.source
-def mlb_stats_api(seasons: list[int]):
+def mlb_stats_api(seasons: list[int]) -> DltResource:
     return games(seasons)
 
+
+# Module-level objects for Dagster's @dlt_assets to import directly.
+# Always targets the current season, always Snowflake — the CLI block
+# below stays the flexible/ad hoc path (arbitrary seasons, DuckDB).
+games_source = mlb_stats_api(seasons=[CURRENT_SEASON])
+games_pipeline = dlt.pipeline(
+    pipeline_name="mlb_games",
+    destination="snowflake",
+    dataset_name="raw",
+)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -56,18 +70,16 @@ if __name__ == "__main__":
         help="Defaults to duckdb (free, local). Pass --destination snowflake to hit the real warehouse.",
     )
     parser.add_argument(
-        "--seasons", nargs="+", type=int, default=[2022, 2023, 2024, 2025, 2026],
-        help="Seasons to (re)load. Defaults to full history through current season.",
+        "--seasons", nargs="+", type=int, default=list(range(2022, CURRENT_SEASON + 1)),
+        help="Seasons to (re)load. Defaults to full history through the current season.",
     )
     args = parser.parse_args()
 
     if args.destination == "duckdb":
-        # Same DUCKDB_PATH convention CI already uses — points at the same
-        # dev.duckdb file dbt's dev_duck target reads, not a stray new file.
         destination = dlt.destinations.duckdb(credentials=os.getenv("DUCKDB_PATH", "dev.duckdb"))
+        pipeline = dlt.pipeline(pipeline_name="mlb_games", destination=destination, dataset_name="raw")
     else:
-        destination = "snowflake"  # credentials come from .dlt/secrets.toml
+        pipeline = games_pipeline
 
-    pipeline = dlt.pipeline(pipeline_name="mlb_games", destination=destination, dataset_name="raw")
     load_info = pipeline.run(mlb_stats_api(seasons=args.seasons))
     print(load_info)
