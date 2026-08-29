@@ -52,7 +52,7 @@ make setup
 source .venv/bin/activate
 
 # Load data into local DuckDB
-python mlb_pipeline.py --destination duckdb
+python pipelines/mlb_games.py --destination duckdb
 
 # Run dbt against Snowflake (from repo root)
 make dbt-build
