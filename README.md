@@ -22,8 +22,8 @@ Built for fun and education, not because anyone asked.
 
 | Layer | Tool | Status |
 |---|---|---|
-| Orchestration | Dagster OSS (self-hosted) | VPS stack built and deployed (August 2026) — no real assets wired yet; nothing schedules production data loads today (`ci.yml` runs on PR/push only, no cron) |
-| Observability | Dagster asset checks | Depends on the Dagster setup above |
+| Orchestration | GitHub Actions | Design not yet implemented — nothing schedules production data loads today (`ci.yml` runs on PR/push only, no cron) |
+| Observability | TBD | Not yet decided |
 
 **Planned (Phase 6+):**
 

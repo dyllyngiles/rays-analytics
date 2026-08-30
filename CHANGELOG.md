@@ -383,3 +383,34 @@ Note: `chore/split-claude-md-changelog` remains a separate open branch, not touc
 6. Decide the next data source to add (Statcast/pybaseball no longer assumed by default)
 7. Implement the `CI_DEPLOYER` / two-database split design decided this session
 8. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+---
+
+### 2026-08-30 — Phase 5: Dagster/VPS orchestration abandoned, decommissioned from main
+
+**Summary: the self-hosted Dagster OSS on a DigitalOcean VPS build (started July 2026) is abandoned.** Root cause: the MLB Stats API blocks DigitalOcean's IP range at the CDN level. This isn't a code bug or a config issue in this project — it's a network-level block on the hosting provider's IP space, confirmed by isolating the variable via multi-environment testing (same pipeline code, same request, different source IP/network — requests failed only from the DigitalOcean-hosted environment, succeeded from others). No known workaround fits this project's scope (no proxy/relay layer being added just to keep a VPS alive), so the VPS approach is a dead end for this specific data source regardless of which orchestrator runs on it.
+
+**What was actually built before the block was found, for the record:**
+- SSH key pair generated, DigitalOcean droplet provisioned (NYC3, Basic 2vCPU/4GB/80GB, Ubuntu 24.04), hardened (non-root user, root SSH login disabled, password auth disabled, ufw active with SSH-only).
+- Docker + Docker Compose installed on the droplet; a four-service stack (`dagster-webserver`, `dagster-daemon`, a dedicated user-code gRPC server, Postgres for run/event storage) plus a Tailscale sidecar (`network_mode: service:tailscale`, webserver never binds a public port) written and successfully deployed — all five containers came up clean, Tailscale sidecar confirmed joined the tailnet.
+- **Daemon bug found and fixed:** `docker-compose.yml` initially launched the daemon without the correct workspace flag, so it couldn't locate the user-code gRPC server — fixed by passing the explicit workspace argument the daemon needs to find `workspace.yaml`.
+- **Credential/Compose-secrets work:** Postgres credentials wired into the Compose stack via environment variables rather than hardcoded in `docker-compose.yml`, following the project's existing `.env`-based secrets pattern. (Flagged separately in CLAUDE.md: Claude Code reading `.env` directly while doing this wiring work was noted as a leak-surface risk to watch going forward.)
+- Build-context/path issues in `Dockerfile.user_code` (context is repo root, so `COPY` paths for anything under `orchestration/` needed the `orchestration/` prefix) hit and fixed.
+
+**How the IP-blocking issue was isolated:** ran the same `pipelines/mlb_games.py` pull against the MLB Stats API from multiple environments — local Mac, and the DigitalOcean droplet — with the DigitalOcean-hosted attempt failing where every other environment succeeded, pointing at the droplet's network/IP rather than the code.
+
+**Decision:** abandon Dagster OSS on a self-hosted VPS entirely. Orchestration for production scheduling pivots to GitHub Actions + dbt/dlt native tooling (design not yet implemented — see CLAUDE.md Current Status for next actions). GitHub Actions keeps its existing PR/merge-time gate role in `ci.yml` unchanged either way.
+
+**This session's cleanup (branch `chore/decommission-dagster-vps`):**
+- Deleted `orchestration/` entirely (`Dockerfile.dagster`, `Dockerfile.user_code`, `docker-compose.yml`, `dagster.yaml`, `workspace.yaml`, `user_code/`).
+- Removed the `dagster`/`dagster-dbt`/`dagster-dlt`/`dagster-postgres` optional-dependencies extra from `pyproject.toml` (the extra is gone entirely, not left empty) and regenerated `uv.lock`.
+- Removed the module-level `games_source`/`games_pipeline` objects from `pipelines/mlb_games.py` — these existed solely so `dagster-dlt`'s `@dlt_assets` could import them; the CLI path (`games()`, `mlb_stats_api()`, the `argparse` block) is untouched and remains the way a future GitHub Actions workflow will invoke the pipeline.
+- Rewrote CLAUDE.md's Phase 5 section, stack table, cost estimate, and related Key Architectural Decisions bullets to describe the reversal honestly rather than deleting the history.
+
+**Full prior implementation and a complete retrospective are preserved on `archive/phase-5-dagster-vps`** (retrospective doc: `archive/phase-5-dagster-vps-retrospective.md` on that branch) — nothing about the Dagster/VPS work is lost, it's just off `main`.
+
+**Next actions:**
+1. Design GitHub Actions-based production scheduling for the `games` dlt pipeline + dbt build (cron trigger, credential handling, run-failure alerting)
+2. Design "run succeeded but data is wrong" observability now that Dagster asset checks are off the table (e.g. `dbt source freshness` as a CI step, or Elementary)
+3. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
+4. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence

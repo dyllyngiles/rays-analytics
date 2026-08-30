@@ -53,16 +53,6 @@ def mlb_stats_api(seasons: list[int]) -> DltResource:
     return games(seasons)
 
 
-# Module-level objects for Dagster's @dlt_assets to import directly.
-# Always targets the current season, always Snowflake — the CLI block
-# below stays the flexible/ad hoc path (arbitrary seasons, DuckDB).
-games_source = mlb_stats_api(seasons=[CURRENT_SEASON])
-games_pipeline = dlt.pipeline(
-    pipeline_name="mlb_games",
-    destination="snowflake",
-    dataset_name="raw",
-)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -79,7 +69,7 @@ if __name__ == "__main__":
         destination = dlt.destinations.duckdb(credentials=os.getenv("DUCKDB_PATH", "dev.duckdb"))
         pipeline = dlt.pipeline(pipeline_name="mlb_games", destination=destination, dataset_name="raw")
     else:
-        pipeline = games_pipeline
+        pipeline = dlt.pipeline(pipeline_name="mlb_games", destination="snowflake", dataset_name="raw")
 
     load_info = pipeline.run(mlb_stats_api(seasons=args.seasons))
     print(load_info)
