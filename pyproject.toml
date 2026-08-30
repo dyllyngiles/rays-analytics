@@ -10,14 +10,6 @@ dependencies = [
     "requests",
 ]
 
-[project.optional-dependencies]
-dagster = [
-    "dagster>=1.13.18",
-    "dagster-dbt>=0.29.18",
-    "dagster-dlt>=0.29.18",
-    "dagster-postgres>=0.29.18",
-]
-
 [tool.uv.audit]
 ignore = [
     "GHSA-3496-9g83-7v6x",
