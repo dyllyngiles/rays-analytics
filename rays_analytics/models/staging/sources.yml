@@ -6,6 +6,14 @@ sources:
     schema: raw
     tables:
       - name: games
+        loaded_at_query: |
+            select max(l.inserted_at)
+            from {{ source('mlb', '_dlt_loads') }} l
+            join {{ this }} t on t._dlt_load_id = l.load_id  
+        config:
+          freshness:
+            warn_after: {count: 30, period: hour}
+            error_after: {count: 48, period: hour}
         description: Raw game schedule and results for Tampa Bay Rays, 2022-present
         columns:
           - name: game_pk
@@ -32,3 +40,16 @@ sources:
             description: MLB venue identifier
           - name: venue_name
             description: Name of the ballpark
+      - name: _dlt_loads
+        description: dlt-managed load ledger — one row per pipeline run, used to detect completed vs. incomplete loads and to drive the `games` table's freshness query
+        columns:
+          - name: load_id
+            description: Unique identifier for the load job, matches `_dlt_load_id` on loaded tables
+          - name: schema_name
+            description: Name of the dlt schema used during the load
+          - name: schema_version_hash
+            description: Hash of the schema version at load time
+          - name: status
+            description: Load status; 0 means completed, other values indicate an incomplete or interrupted load
+          - name: inserted_at
+            description: Timestamp when the load was recorded
