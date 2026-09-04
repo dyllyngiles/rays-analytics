@@ -14,6 +14,9 @@ sources:
           freshness:
             warn_after: {count: 30, period: hour}
             error_after: {count: 48, period: hour}
+        data_tests:
+          - dbt_expectations.expect_table_row_count_to_be_between:
+              min_value: "{{ 600 if 3 <= modules.datetime.datetime.now().month <= 11 else 0 }}"
         description: Raw game schedule and results for Tampa Bay Rays, 2022-present
         columns:
           - name: game_pk
