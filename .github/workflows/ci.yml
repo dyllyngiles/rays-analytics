@@ -60,6 +60,14 @@ jobs:
           PROFILE
 
       # 6. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then install packages.yml dependencies (e.g. dbt-expectations)
+      - name: Run dbt deps
+        run: |
+          source ../.venv/bin/activate
+          dbt deps
+        working-directory: rays_analytics
+
+      # 7. Activate venv from one level up (../) since we're inside rays_analytics/
       #    then run a state-based build against Snowflake DEV — bounds credit
       #    spend per PR instead of building the full project.
       - name: Run dbt build
@@ -115,6 +123,14 @@ jobs:
           PROFILE
 
       # 5. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then install packages.yml dependencies (e.g. dbt-expectations)
+      - name: Run dbt deps
+        run: |
+          source ../.venv/bin/activate
+          dbt deps
+        working-directory: rays_analytics
+
+      # 6. Activate venv from one level up (../) since we're inside rays_analytics/
       #    then run dbt build — compiles models, materializes them, runs all tests
       #    against real Snowflake. Assumes RAW.GAMES is already current from
       #    regular pipeline runs — this is a code-correctness gate, not a
