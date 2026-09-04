@@ -68,12 +68,12 @@ jobs:
         working-directory: rays_analytics
 
       # 7. Activate venv from one level up (../) since we're inside rays_analytics/
-      #    then run a state-based build against Snowflake DEV — bounds credit
-      #    spend per PR instead of building the full project.
+      #    then run a full dbt build against Snowflake DEV. state:modified+
+      #    needs a comparison manifest that doesn't exist yet — see CLAUDE.md.
       - name: Run dbt build
         run: |
           source ../.venv/bin/activate
-          dbt build --select state:modified+
+          dbt build
         working-directory: rays_analytics
 
   dbt-build-snowflake:
