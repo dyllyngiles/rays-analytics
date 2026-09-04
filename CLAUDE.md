@@ -62,7 +62,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 **Docker is not currently part of the stack (reversed back, August 2026).** It briefly ran via Docker Compose on a VPS for self-hosted Dagster; that whole approach was abandoned (see Phase 5) and the VPS decommissioned. The Mac Mini runs no containers, and nothing else currently needs Docker.
 
-**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema. `dev_duck` removal decided, not yet implemented — see CI Architecture Notes.
+**`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema. `dev_duck` removed from `ci.yml` (September 2026); local `profiles.yml`/Makefile still carry it as an ad hoc scratchpad target.
 
 **DuckDB path is always relative** (`dev.duckdb`) from repo root, never hardcoded absolute. `DUCKDB_PATH` overrides it in CI.
 
@@ -77,11 +77,11 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Ingestion | dlt | **Running** | Python library, no Docker |
 | Bronze storage | Amazon S3 | Bonus track, not started | Same region as Snowflake (us-east-2); raw Iceberg tables, engine-agnostic |
 | Iceberg catalog | Snowflake Open Catalog (managed Apache Polaris) | Bonus track, not started | Free during current billing period; same software as self-hosted Polaris if revisited |
-| Warehouse (local dev) | DuckDB | Demoted, ad hoc scratchpad only | Dropped as a dbt build target August 2026 — CLI/Marimo only now. CI's post-DuckDB shape designed, not implemented, see CI Architecture Notes |
-| Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend — raised from ~$30–40 now that dbt builds against Snowflake exclusively |
-| Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target as of August 2026 |
+| Warehouse (local dev) | DuckDB | Demoted, ad hoc scratchpad only | Dropped as a dbt build target August 2026 — CLI/Marimo only now. `ci.yml` is Snowflake-only as of September 2026 |
+| Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend |
+| Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
-| Orchestration | GitHub Actions | Decided, not yet implemented | Reversed from self-hosted Dagster OSS on a VPS (abandoned August 2026 — see Phase 5). nothing schedules production loads today — `ci.yml` runs on PR/push only, no cron |
+| Orchestration | GitHub Actions | PR/merge gate running; production scheduling not implemented | Reversed from self-hosted Dagster OSS on a VPS — see Phase 5. No cron yet |
 | Observability | TBD | Decided, not yet implemented | Was planned as Dagster asset checks; needs a new plan now that Dagster is off the table. Elementary still optional |
 | BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
 | Version control + CI | GitHub + GitHub Actions | **Running** | |
@@ -92,18 +92,18 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 
 Roadmap is split into two tracks so the application timeline isn't gated by platform-depth exploration that's fun but not required.
 
-**Core path (apply-ready, collapsed timeline):** Phase 4 slimmed (dlt → Snowflake `RAW` directly, no bronze/Iceberg); Phase 6 elevated (MetricFlow + Snowflake Semantic Views are core, not optional); Phase 8 pulled forward (README + walkthrough); new low-effort public self-serve demo via Evidence's Universal SQL (DuckDB-WASM) over Parquet on GitHub Pages, zero backend/cost. Phase 5 orchestration grew into a Dagster/VPS build, then reversed back to GitHub Actions — see Phase 5 below and Key Architectural Decisions.
+**Core path (apply-ready, collapsed timeline):** Phase 4 slimmed (dlt → Snowflake `RAW` directly, no bronze/Iceberg); Phase 6 elevated (MetricFlow + Snowflake Semantic Views are core, not optional); Phase 8 pulled forward (README + walkthrough); new low-effort public self-serve demo via Evidence's Universal SQL (DuckDB-WASM) over Parquet on GitHub Pages, zero backend/cost. Phase 5 orchestration history: see Phase 5 below.
 
 **Bonus / platform-depth track (curiosity-driven, no deadline):** Bronze layer (S3 + Iceberg + Snowflake Open Catalog, future self-hosted Polaris/Lakekeeper); deep Snowflake exploration (Time Travel, Zero-Copy Cloning, Cortex, Marketplace, Streamlit); Phase 7 AI/MCP layer incl. a MotherDuck Dives sandbox; self-serve BI tool decision (Lightdash vs. Metabase).
 
 ---
 
 **Snowflake-native additions (Phase 3+):**
-- dbt Projects on Snowflake (GA November 2025) — native dbt Core inside Snowflake via a Git-connected Workspace + `DBT PROJECT` object. Explored in Phase 3, unconfigured. Stays a bonus-track curiosity, not a candidate for the Phase 5 GitHub Actions orchestration approach.
+- dbt Projects on Snowflake (GA November 2025) — native dbt Core inside Snowflake via a Git-connected Workspace + `DBT PROJECT` object. Explored in Phase 3, unconfigured — bonus-track curiosity only.
 - Snowflake Semantic Views (GA March 2026) — warehouse-native semantic layer, zero extra cost
 - Snowflake Cortex Analyst — NL querying over semantic views, ~$5–15/month at hobby scale
 
-**Estimated monthly cost: ~$65–95/month** — Snowflake ~$35–55 (raised from ~$30–40 now that DuckDB is dropped as a dbt build target), Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, rest free. The ~$24/mo DigitalOcean VPS line item is gone — see Phase 5.
+**Estimated monthly cost: ~$65–95/month** — Snowflake ~$35–55, Cortex ~$5–15, Claude Pro $20, Anthropic API (Phase 7+) ~$5–10, rest free. No VPS line item — see Phase 5.
 
 ---
 
@@ -119,7 +119,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **Cube's necessity reconsidered (June 2026):** Cube isn't itself a dashboard tool — now optional pending the Phase 6 BI-tool decision.
 
-**Dagster OSS on a self-hosted DigitalOcean VPS, abandoned (decided July–August 2026, reversed August 2026):** built and deployed a four-service Docker Compose stack + Tailscale sidecar, then hit a hard blocker — MLB Stats API blocks DigitalOcean's IP range at the CDN level, confirmed via multi-environment testing. Pivoted to GitHub Actions + dbt/dlt native tooling. Full narrative + retrospective: CHANGELOG.md and `archive/phase-5-dagster-vps`.
+**Dagster OSS on a self-hosted DigitalOcean VPS, abandoned (July–August 2026):** MLB Stats API blocks DigitalOcean's IP range at the CDN level — see Phase 5 below for full narrative.
 
 **Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (June 2026, bonus track):** Open Catalog is managed Polaris — free, CI-reachable, open-source-first.
 
@@ -146,8 +146,6 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 **Secrets consolidation — single `.env` (decided July 2026):** dlt and dbt both read one gitignored `.env` at repo root, replacing a separate `.dlt/secrets.toml`.
 
 **Why 16GB Mac Mini is sufficient (reworded August 2026):** nothing in the current stack runs on Docker — the Dagster/VPS Docker Compose experiment was abandoned (see above) — so the RAM ceiling isn't a live constraint on any tool choice.
-
-**Orchestration: GitHub Actions, not Dagster (re-reversed August 2026):** after the Dagster/VPS attempt was abandoned, orchestration reverts to GitHub Actions + dbt/dlt native tooling — its PR/merge-time gate role is unchanged, production scheduling to be redesigned on top of it. Full history: CHANGELOG.md.
 
 **Why key-pair for CI Snowflake auth (reversed July 2026):** the WIF prerequisite (`dbt-labs/dbt-adapters` PR #1316) was never merged — key-pair matches dlt, no asymmetry. See Snowflake CI Auth Notes below.
 
@@ -410,19 +408,15 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-`.github/workflows/ci.yml` has **two jobs**, both against Snowflake, no DuckDB (implemented September 2026): `pull_request` runs a full `dbt build` against `DEV`; `push` to `main` runs a full `dbt build` against `PROD`. Both authenticate via key-pair, `private_key` passed inline from `SNOWFLAKE_PRIVATE_KEY` (no key file written to disk). `dev_duck` target and `make dbt-build-duckdb` fully removed, not kept as fallback — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
+`.github/workflows/ci.yml` has **two jobs**, both against Snowflake, no DuckDB (implemented September 2026): `pull_request` runs a full `dbt build` against `DEV`; `push` to `main` runs a full `dbt build` against `PROD`. Both authenticate via key-pair, `private_key` passed inline from `SNOWFLAKE_PRIVATE_KEY` (no key file written to disk, no `id-token: write` — key-pair doesn't use OIDC). `dev_duck` target and `make dbt-build-duckdb` fully removed, not kept as fallback — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
 
 **PR job on `state:modified+` — on the horizon, not yet wired (September 2026):** attempted during the DuckDB-removal PR, reverted to a full build — `state:modified+` needs a comparison `manifest.json` to diff against, and CI has no mechanism to produce or fetch one yet (`Runtime Error: Got a state selector method, but no comparison manifest`). Two candidate sourcing approaches, neither evaluated in depth: (a) upload `manifest.json` as a GitHub Actions artifact from the merge job, fetched by the PR job via a cross-workflow-run artifact download; (b) piggyback on the existing `gh-pages` docs publish to also host `manifest.json` alongside the dbt docs site, fetched via plain HTTP in the PR job. Deliberately low-priority — full builds are cheap at the current model count (4), revisit once that stops being true. `RAYS_ANALYTICS_DEV`/`DEV_ROLE` and `RAYS_ANALYTICS`/`CI_DEPLOYER` two-database split below is a separate, still-deferred piece of this same post-DuckDB design.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
-**Snowflake job steps:** writes `SNOWFLAKE_PRIVATE_KEY` to `$RUNNER_TEMP/ci_key.pem` (chmod 600, never logged), generates `profiles.yml` with `user`/`account` from Secrets and `role`/`database`/`warehouse`/`schema` hardcoded (non-sensitive), runs `dbt build`. No `id-token: write` — key-pair doesn't use OIDC.
-
 **Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's GitHub-Actions-based observability design lands (a standalone `dbt source freshness` task or similar, now that the Dagster asset-checks plan is off the table — see Phase 5).
 
-**Running under `SYSADMIN`, not scoped down (flagged July 2026):** broader than the job needs. A `CI_DEPLOYER` custom role (warehouse usage + schema-level create/write only) is a known follow-up, deprioritized behind the README/walkthrough and a baseball-question mart.
-
-**Design decided, not implemented (August 2026):** a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad access) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, CI-only) — replacing the current schema-only `RAW`/`DEV`/`PROD` split in one database.
+**Running under `SYSADMIN`, not scoped down (flagged July 2026, design only, not implemented):** broader than the job needs. Planned fix is a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad access) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, warehouse usage + schema-level create/write only) — replacing the current schema-only `RAW`/`DEV`/`PROD` split in one database. Deprioritized behind the README/walkthrough and a baseball-question mart.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -439,7 +433,7 @@ uv sync --locked
 ```
 Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
 
-**`sqlparse` CVEs suppressed, not fixed (August 2026, now five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix) — five sqlparse GHSA IDs now listed, most recently `GHSA-cfqr-cjx5-5jcm` (added September 2026). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
+**`sqlparse` CVEs suppressed, not fixed (August 2026, five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix), most recently adding `GHSA-cfqr-cjx5-5jcm`. Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 
@@ -532,9 +526,9 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5's Dagster/VPS orchestration attempt was abandoned (August 2026) after the MLB Stats API was found to block DigitalOcean's IP range at the CDN level — see Phase 5 above. The `orchestration/` directory, the `dagster`/`dagster-dbt`/`dagster-dlt`/`dagster-postgres` extra in `pyproject.toml`, and the Dagster-specific module-level objects in `pipelines/mlb_games.py` have been removed from `main`; the full prior implementation is preserved on `archive/phase-5-dagster-vps`. DuckDB-as-scratchpad-only also decided August 2026, not yet implemented in code/config.
+**Phase 4 complete.** Phase 5's Dagster/VPS attempt is fully cleaned up off `main` — see Phase 5 above for why it was abandoned. The `orchestration/` directory, the `dagster`/`dagster-dbt`/`dagster-dlt`/`dagster-postgres` extra in `pyproject.toml`, and the Dagster-specific module-level objects in `pipelines/mlb_games.py` are removed; full prior implementation preserved on `archive/phase-5-dagster-vps`. `ci.yml` is Snowflake-only (September 2026); local `profiles.yml`/Makefile DuckDB scratchpad cleanup still not done.
 
-**Still open:** GitHub Actions-based production scheduling design not yet started. No cron/schedule exists today — `ci.yml` still runs on PR/push only.
+**Still open:** no cron/schedule exists today — `ci.yml` still runs on PR/push only.
 
 **Next actions:**
 1. Design GitHub Actions-based production scheduling for the `games` dlt pipeline + dbt build (cron trigger, credential handling, run-failure alerting)
@@ -543,7 +537,7 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 4. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
 **Deferred, no target phase:**
-- `CI_DEPLOYER` role-scoping and CI's post-DuckDB shape — both fully designed, see CI Architecture Notes, not implemented
+- `CI_DEPLOYER` role-scoping and the two-database split, `state:modified+` in CI — all designed, see CI Architecture Notes, not implemented
 - Next data source will need dlt's real `incremental()` cursor pattern (`games` doesn't use it)
 - Deliberately introduce a schema change and observe dlt/dbt source freshness response — not yet done
 
