@@ -439,7 +439,7 @@ uv sync --locked
 ```
 Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
 
-**`sqlparse` CVEs suppressed, not fixed (August 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
+**`sqlparse` CVEs suppressed, not fixed (August 2026, now five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix) — five sqlparse GHSA IDs now listed, most recently `GHSA-cfqr-cjx5-5jcm` (added September 2026). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
 
 **UV version:** Pinned to `0.11.17` to match local version exactly.
 

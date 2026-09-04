@@ -17,8 +17,9 @@ ignore = [
     "GHSA-f2ff-p2ww-7p4p",
     "GHSA-pwgv-4x5q-6m9f",
     "GHSA-prg7-hcfm-mfcr",
+    "GHSA-cfqr-cjx5-5jcm",
 ]
 # sqlparse<0.6.0 pinned by dbt-core (no release allows 0.6.0+ yet).
 # dbt-core only compiles trusted, project-generated SQL, so the underlying
-# DoS/ReDoS vectors don't apply to this pipeline's threat model.
+# code-injection/DoS/ReDoS vectors don't apply to this pipeline's threat model.
 # Tracking: https://github.com/dbt-labs/dbt-core/issues/12329
