@@ -238,33 +238,12 @@ ALTER USER DBT_SERVICE_USER SET RSA_PUBLIC_KEY='<paste_base64_here>';
 
 ### Snowflake CI Auth Notes
 
-**Decision (reversed July 2026):** the Snowflake-on-merge CI job authenticates via key-pair, not WIF. The "PR merged May 20, 2026" claim was wrong — `dbt-labs/dbt-adapters` PR #1316 (Snowflake WIF support) is still open since September 2025, blocked on a maintainer requirement for integration-test infra (dbt-snowflake v1.12.0 milestone shows it 45% complete). Reversed to key-pair — dlt and dbt both use key-pair in CI now, no asymmetry.
+**Decision (reversed July 2026):** the Snowflake-on-merge CI job authenticates via key-pair, not WIF. `dbt-labs/dbt-adapters` PR #1316 (Snowflake WIF support) is still open since September 2025, blocked on maintainer-required integration-test infra. Reversed to key-pair — dlt and dbt both use key-pair in CI now, no asymmetry.
 
-**`RAYS_ANALYTICS_CI_SERVICE` setup, completed this session:**
-- Authentication policy `WIF_GITHUB_ONLY` (in `RAYS_ANALYTICS.RAW`) stays attached and ACTIVE — `AUTHENTICATION_METHODS = [ALL]`, not restricted to WORKLOAD_IDENTITY, so key-pair auth is permitted under it. Left attached rather than removed: dormant, ready if WIF ships later.
-- `RSA_PUBLIC_KEY` was null (WIF meant no key had ever been generated). New key-pair generated and registered:
-```bash
-openssl genrsa -out ci_service_rsa_key.pem 2048
-openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
-  -in ci_service_rsa_key.pem -out ci_service_rsa_key_p8.pem
-openssl rsa -in ci_service_rsa_key.pem -pubout -out ci_service_rsa_key.pub
-```
-Private key: `~/.ssh/ci_service_user_rsa_key_p8.pem` (chmod 600), separate from `DBT_SERVICE_USER`'s key. Verified via `dbt debug --target ci_test` — `ci_test` is a **kept, intentional** local target, not a one-time throwaway: `make dbt-debug-ci` depends on it as a repeatable pre-merge sanity check that CI auth still works before pushing to main. It stays in `~/.dbt/profiles.yml` deliberately. A fresh clone needs to add it manually (not checked in — see Current `profiles.yml` structure below for why credentials stay out of the repo):
-
-```yaml
-    ci_test:
-      type: snowflake
-      account: "{{ env_var('DESTINATION__SNOWFLAKE__CREDENTIALS__HOST') }}"
-      user: RAYS_ANALYTICS_CI_SERVICE
-      private_key_path: ~/.ssh/ci_service_user_rsa_key_p8.pem
-      role: SYSADMIN
-      database: RAYS_ANALYTICS
-      warehouse: COMPUTE_WH
-      schema: PROD
-      threads: 4
-```
-
-Mirrors `dev`, but authenticates as `RAYS_ANALYTICS_CI_SERVICE` with its own key path instead of `DBT_SERVICE_USER`.
+**`RAYS_ANALYTICS_CI_SERVICE` setup:**
+- Authentication policy `WIF_GITHUB_ONLY` (in `RAYS_ANALYTICS.RAW`) stays attached and ACTIVE — `AUTHENTICATION_METHODS = [ALL]` permits key-pair too, left dormant rather than removed in case WIF ships later.
+- `RSA_PUBLIC_KEY` was null (WIF meant no key had ever been generated); new key-pair generated the same way as `DBT_SERVICE_USER`'s (see Key-Pair Auth Notes above), registered, private key at `~/.ssh/ci_service_user_rsa_key_p8.pem` (chmod 600), separate from `DBT_SERVICE_USER`'s.
+- Verified via `dbt debug --target ci_test` — `ci_test` is a **kept, intentional** local target (not checked in), mirroring `dev` but authenticating as `RAYS_ANALYTICS_CI_SERVICE`. `make dbt-debug-ci` depends on it as a repeatable pre-merge sanity check. A fresh clone must add it manually to `~/.dbt/profiles.yml`.
 
 **Gotchas carried over from the original WIF setup:**
 - `CREATE USER` / `CREATE AUTHENTICATION POLICY` are `SECURITYADMIN`/`USERADMIN` territory, not `SYSADMIN`.
@@ -307,7 +286,7 @@ ALTER USER <username> SET DEFAULT_ROLE = SYSADMIN;
 ```
 `ACCOUNTADMIN` is reserved for genuinely account-level tasks: resource monitors, billing, rare service-account/user management. Full four-role rotation is enterprise ceremony not worth it solo — two roles is right-sized here.
 
-**The gotcha (bit three times — twice in Phase 3, once in Phase 4):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at three object levels (table, warehouse, schema), each a distinct error — full text: see CHANGELOG.md.
+**The gotcha (bit four times — twice in Phase 3, once in Phase 4, once at `PROD`'s first real pipeline run):** anything created via Snowsight UI is owned by whatever role the session defaults to. If that's `ACCOUNTADMIN` and `DBT_SERVICE_USER` runs as `SYSADMIN`, `SYSADMIN` has zero automatic access. Hit at table, warehouse, and schema level, each a distinct error — full text: see CHANGELOG.md. The fourth hit was resolved by transferring ownership of all three schemas to `SYSADMIN` outright (September 2026) rather than another one-off grant.
 
 **Fix, any case:** `GRANT <privilege> ON <object> TO ROLE SYSADMIN`, run as the object's owning role. Better fix: switch the Snowsight role selector to `SYSADMIN` *before* manual UI work, so objects are owned right from creation.
 
@@ -410,27 +389,27 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 `.github/workflows/ci.yml` has **two jobs**, both against Snowflake, no DuckDB (implemented September 2026): `pull_request` runs a full `dbt build` against `DEV`; `push` to `main` runs a full `dbt build` against `PROD`. Both authenticate via key-pair, `private_key` passed inline from `SNOWFLAKE_PRIVATE_KEY` (no key file, no `id-token: write`). `dev_duck` target and `make dbt-build-duckdb` fully removed, not kept as fallback — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
 
-**PR job on `state:modified+` — on the horizon, not yet wired (September 2026):** attempted during the DuckDB-removal PR, reverted to a full build — `state:modified+` needs a comparison `manifest.json` to diff against, and CI has no mechanism to produce or fetch one yet (`Runtime Error: Got a state selector method, but no comparison manifest`). Two candidate sourcing approaches, neither evaluated in depth: (a) upload `manifest.json` as a GitHub Actions artifact from the merge job, fetched by the PR job via a cross-workflow-run artifact download; (b) piggyback on the existing `gh-pages` docs publish to also host `manifest.json` alongside the dbt docs site, fetched via plain HTTP in the PR job. Deliberately low-priority — full builds are cheap at the current model count (4), revisit once that stops being true. `RAYS_ANALYTICS_DEV`/`DEV_ROLE` and `RAYS_ANALYTICS`/`CI_DEPLOYER` two-database split below is a separate, still-deferred piece of this same post-DuckDB design.
+**PR job on `state:modified+` — on the horizon, not yet wired (September 2026):** attempted during the DuckDB-removal PR, reverted to a full build — `state:modified+` needs a comparison `manifest.json` to diff against, and CI has no mechanism to produce or fetch one yet (`Runtime Error: Got a state selector method, but no comparison manifest`). Two untested candidates: (a) upload `manifest.json` as a GitHub Actions artifact from the merge job, fetched cross-run by the PR job; (b) piggyback on the existing `gh-pages` docs publish to host `manifest.json` too, fetched via plain HTTP. Low-priority — full builds are cheap at the current model count (4). The `CI_DEPLOYER` two-database split below is a separate, still-deferred piece of this same design.
 
 **`games_pipeline.yml` — production scheduling implemented (September 2026):** daily cron (6:47am Eastern, DST-safe `timezone:` field) plus `workflow_dispatch`. Runs the current-season `games` dlt pipeline, then `dbt deps` → `dbt source freshness` → full `dbt build`, against Snowflake `PROD`, same inline `private_key` pattern as `ci.yml`. `concurrency: {group: games-pipeline, cancel-in-progress: false}` stops a stray dispatch racing the cron — `false` since dlt's SIGTERM handling is graceful shutdown, not safe mid-load cancellation. `dbt source freshness` is a sanity check, not a true staleness gate: `games()`'s full re-pull + merge means a successful run always updates `_dlt_loads`, so it can't distinguish "genuinely new data" from "ran, found nothing new" — revisit with a real `incremental()` cursor. Run-failure alerting not designed — see Current Status.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
-**Known gap:** green means "code correct," not "Snowflake data fresh" — doesn't re-run the dlt pipeline. Closes once Phase 5's GitHub-Actions-based observability design lands (a standalone `dbt source freshness` task or similar, now that the Dagster asset-checks plan is off the table — see Phase 5).
+**Known gap:** `ci.yml` green means "code correct," not "Snowflake data fresh" — it doesn't re-run the dlt pipeline. That job is `games_pipeline.yml` now; see Current Status for what its freshness check does and doesn't prove.
 
-**Running under `SYSADMIN`, not scoped down (flagged July 2026, design only, not implemented):** broader than the job needs. Planned fix is a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad access) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, warehouse usage + schema-level create/write only) — replacing the current schema-only `RAW`/`DEV`/`PROD` split in one database. Deprioritized behind the README/walkthrough and a baseball-question mart.
+**Running under `SYSADMIN`, not scoped down (flagged July 2026, design only, not implemented):** broader than the job needs. Planned fix: a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, warehouse usage + schema-level create/write only) — replacing today's schema-only split in one database. Simpler starting point now that `SYSADMIN` cleanly owns all three schemas (ownership transfer, September 2026 — see CHANGELOG). Deprioritized behind the README/walkthrough and a baseball-question mart.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
 - `astral-sh/setup-uv` v8.1.0 → `08807647e7069bb48b6ef5acd8ec9567f424441b`
 
-**Dependency installation/auditing:** `uv sync --locked` (fails on `uv.lock`/`pyproject.toml` drift); `uv audit` runs as a CI step, PR job only, built into uv 0.10.12+.
+**Dependency install/audit:** `uv sync --locked` (fails on `uv.lock`/`pyproject.toml` drift); `uv audit` runs as a CI step, PR job only, built into uv 0.10.12+.
 
 **`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit twice: `cryptography`/`msgpack` on a docs PR, `snowflake-connector-python`/CVE-2026-15925 on a CI-rewrite PR). Fix is a narrow lockfile bump from repo root (`uv.lock` lives at root, not `rays_analytics/`): `uv lock --upgrade-package <name> && uv sync --locked`.
 
-**`sqlparse` CVEs suppressed, not fixed (August 2026, five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix), most recently adding `GHSA-cfqr-cjx5-5jcm`. Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
+**`sqlparse` CVEs suppressed, not fixed (five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked, blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a move to dbt-core v2/Fusion (drops sqlparse) — not a reason to pull v2 forward while alpha/beta.
 
-**UV version:** Pinned to `0.11.17` to match local version exactly.
+**UV version:** pinned to `0.11.17` to match local exactly.
 
 ---
 
@@ -472,7 +451,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Why it was abandoned:** the MLB Stats API blocks DigitalOcean's IP range at the CDN level — confirmed via multi-environment testing, not fixable from within the stack. Unreachable from any DigitalOcean-hosted process, so the VPS is a dead end regardless of orchestrator.
 
-**Resolution:** production scheduling now runs on `games_pipeline.yml` (GitHub Actions + dbt/dlt native tooling) — see CI Architecture Notes. `ci.yml` keeps its unrelated PR/merge-time gate role.
+**Resolution:** production scheduling runs on `games_pipeline.yml` (GitHub Actions + dbt/dlt native tooling) — first clean scheduled run against Snowflake `PROD` completed September 2026, closing this phase's last open item. `ci.yml` keeps its unrelated PR/merge-time gate role.
 
 **Full detail preserved:** complete prior implementation + retrospective on `archive/phase-5-dagster-vps`. Decision narrative, the daemon bug, and the IP-blocking discovery: CHANGELOG.md.
 
@@ -521,18 +500,26 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### Current Status
 
-**Phase 4 complete.** Phase 5's Dagster/VPS attempt is fully cleaned up off `main` — see Phase 5 above for why it was abandoned. The `orchestration/` directory, the `dagster`/`dagster-dbt`/`dagster-dlt`/`dagster-postgres` extra in `pyproject.toml`, and the Dagster-specific module-level objects in `pipelines/mlb_games.py` are removed; full prior implementation preserved on `archive/phase-5-dagster-vps`. `ci.yml` is Snowflake-only (September 2026); local `profiles.yml`/Makefile DuckDB scratchpad cleanup still not done.
+**Phase 4 and Phase 5 complete.** Dagster/VPS is fully cleaned up off `main` (see Phase 5 above); `games_pipeline.yml` now runs cleanly against Snowflake `PROD` on schedule (first success September 2026, after a schema-ownership fix — see CHANGELOG). `orchestration/`, the Dagster `pyproject.toml` extras, and Dagster-specific objects in `pipelines/mlb_games.py` are removed; full prior implementation on `archive/phase-5-dagster-vps`. `ci.yml` is Snowflake-only; local `profiles.yml`/Makefile DuckDB cleanup still not done. `SYSADMIN` now owns `RAW`/`DEV`/`PROD` cleanly (ownership transfer, September 2026) rather than scattered by creator.
+
+**Observability is intentionally partial, not solved:**
+- **Volume:** real, gating — whole-table floor test, seasonally gated (Apr–Nov)
+- **Quality:** real, gating — 48 dbt tests
+- **Freshness:** partial — `dbt source freshness` proves ingestion ran, not that anything meaningful changed (`games()`'s full re-pull + merge always updates `_dlt_loads` regardless of new data)
+- **Schema:** left at dlt's default (`evolve`) on purpose — observing real drift before configuring `schema_contract`, not an oversight; revisit once drift is seen or before a higher-volume second source
+- **Lineage:** covered, just not badged as observability — the dbt docs site is the lineage graph
+- **Not attempting:** ML anomaly detection, cross-system lineage, automated dashboarding. Elementary OSS/Cloud considered and deferred — Cloud's automated monitors are the real value and aren't in the OSS tier; OSS's own tests need manual per-model tuning impractical at this volume. May resurface in Phase 8 as a portfolio artifact only
 
 **Still open:** run-failure alerting for `games_pipeline.yml` not designed — a failed run just sits red in the Actions tab.
 
 **Next actions:**
 1. Design run-failure alerting for `games_pipeline.yml` (email/Slack/etc. on a failed scheduled run)
-2. Design "run succeeded but data is wrong" observability beyond the current sanity-only freshness check — no orchestrator-native asset checks anymore, needs its own approach (e.g. Elementary)
+2. Close the "run succeeded but data is wrong" gap noted above — no orchestrator-native asset checks anymore, needs its own approach (e.g. Elementary)
 3. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
 4. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
 **Deferred, no target phase:**
-- `CI_DEPLOYER` role-scoping and the two-database split, `state:modified+` in CI — all designed, see CI Architecture Notes, not implemented
+- `CI_DEPLOYER` role-scoping and the two-database split, `state:modified+` in CI — all designed, see CI Architecture Notes, not implemented; simpler now that `SYSADMIN` owns all three schemas cleanly
 - Next data source will need dlt's real `incremental()` cursor pattern (`games` doesn't use it)
 - Deliberately introduce a schema change and observe dlt/dbt source freshness response — not yet done
 
