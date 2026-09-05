@@ -81,7 +81,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 | Warehouse (cloud) | Snowflake | **Running** | ~$35–55/month, X-Small, 60-sec auto-suspend |
 | Transformation | dbt Core + dbt-snowflake | **Running** | Snowflake-only build target |
 | Semantic layer | MetricFlow + Cube Core/Cloud free | Planned, Phase 6 | Cube's necessity under reconsideration — see Key Architectural Decisions |
-| Orchestration | GitHub Actions | PR/merge gate running; production scheduling not implemented | Reversed from self-hosted Dagster OSS on a VPS — see Phase 5. No cron yet |
+| Orchestration | GitHub Actions | **Running** | PR/merge gate (`ci.yml`) plus daily production scheduling (`games_pipeline.yml`). Reversed from self-hosted Dagster OSS on a VPS — see Phase 5 |
 | Observability | TBD | Decided, not yet implemented | Was planned as Dagster asset checks; needs a new plan now that Dagster is off the table. Elementary still optional |
 | BI | Evidence | Planned, Phase 6 | Code-first, Git-native — not yet installed or configured |
 | Version control + CI | GitHub + GitHub Actions | **Running** | |
@@ -99,7 +99,7 @@ Roadmap is split into two tracks so the application timeline isn't gated by plat
 ---
 
 **Snowflake-native additions (Phase 3+):**
-- dbt Projects on Snowflake (GA November 2025) — native dbt Core inside Snowflake via a Git-connected Workspace + `DBT PROJECT` object. Explored in Phase 3, unconfigured — bonus-track curiosity only.
+- dbt Projects on Snowflake (GA November 2025) — native dbt Core via a Git-connected Workspace + `DBT PROJECT` object. Explored in Phase 3, unconfigured — bonus-track curiosity only.
 - Snowflake Semantic Views (GA March 2026) — warehouse-native semantic layer, zero extra cost
 - Snowflake Cortex Analyst — NL querying over semantic views, ~$5–15/month at hobby scale
 
@@ -119,7 +119,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 **Cube's necessity reconsidered (June 2026):** Cube isn't itself a dashboard tool — now optional pending the Phase 6 BI-tool decision.
 
-**Dagster OSS on a self-hosted DigitalOcean VPS, abandoned (July–August 2026):** MLB Stats API blocks DigitalOcean's IP range at the CDN level — see Phase 5 below for full narrative.
+**Dagster OSS on a self-hosted DigitalOcean VPS, abandoned:** MLB Stats API blocks DigitalOcean's IP range at the CDN level — see Phase 5 below.
 
 **Why S3 + Iceberg + Snowflake Open Catalog over self-hosted Polaris or AWS Glue (June 2026, bonus track):** Open Catalog is managed Polaris — free, CI-reachable, open-source-first.
 
@@ -408,9 +408,11 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 ### CI Architecture Notes
 
-`.github/workflows/ci.yml` has **two jobs**, both against Snowflake, no DuckDB (implemented September 2026): `pull_request` runs a full `dbt build` against `DEV`; `push` to `main` runs a full `dbt build` against `PROD`. Both authenticate via key-pair, `private_key` passed inline from `SNOWFLAKE_PRIVATE_KEY` (no key file written to disk, no `id-token: write` — key-pair doesn't use OIDC). `dev_duck` target and `make dbt-build-duckdb` fully removed, not kept as fallback — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
+`.github/workflows/ci.yml` has **two jobs**, both against Snowflake, no DuckDB (implemented September 2026): `pull_request` runs a full `dbt build` against `DEV`; `push` to `main` runs a full `dbt build` against `PROD`. Both authenticate via key-pair, `private_key` passed inline from `SNOWFLAKE_PRIVATE_KEY` (no key file, no `id-token: write`). `dev_duck` target and `make dbt-build-duckdb` fully removed, not kept as fallback — reviving them reintroduces the dialect-portability problem dropping DuckDB solved.
 
 **PR job on `state:modified+` — on the horizon, not yet wired (September 2026):** attempted during the DuckDB-removal PR, reverted to a full build — `state:modified+` needs a comparison `manifest.json` to diff against, and CI has no mechanism to produce or fetch one yet (`Runtime Error: Got a state selector method, but no comparison manifest`). Two candidate sourcing approaches, neither evaluated in depth: (a) upload `manifest.json` as a GitHub Actions artifact from the merge job, fetched by the PR job via a cross-workflow-run artifact download; (b) piggyback on the existing `gh-pages` docs publish to also host `manifest.json` alongside the dbt docs site, fetched via plain HTTP in the PR job. Deliberately low-priority — full builds are cheap at the current model count (4), revisit once that stops being true. `RAYS_ANALYTICS_DEV`/`DEV_ROLE` and `RAYS_ANALYTICS`/`CI_DEPLOYER` two-database split below is a separate, still-deferred piece of this same post-DuckDB design.
+
+**`games_pipeline.yml` — production scheduling implemented (September 2026):** daily cron (6:47am Eastern, DST-safe `timezone:` field) plus `workflow_dispatch`. Runs the current-season `games` dlt pipeline, then `dbt deps` → `dbt source freshness` → full `dbt build`, against Snowflake `PROD`, same inline `private_key` pattern as `ci.yml`. `concurrency: {group: games-pipeline, cancel-in-progress: false}` stops a stray dispatch racing the cron — `false` since dlt's SIGTERM handling is graceful shutdown, not safe mid-load cancellation. `dbt source freshness` is a sanity check, not a true staleness gate: `games()`'s full re-pull + merge means a successful run always updates `_dlt_loads`, so it can't distinguish "genuinely new data" from "ran, found nothing new" — revisit with a real `incremental()` cursor. Run-failure alerting not designed — see Current Status.
 
 **Why `ci.yml` doesn't call `make dbt-build` (deliberate):** `make dbt-build` assumes a local `.env` (`uv run --env-file .env`), which CI intentionally doesn't have — `ci.yml` generates `~/.dbt/profiles.yml` from GitHub Secrets instead. Both jobs' `working-directory: rays_analytics` + bare `dbt build` is correct — don't "fix" this to call the Makefile target, it would break the job.
 
@@ -422,16 +424,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
 - `astral-sh/setup-uv` v8.1.0 → `08807647e7069bb48b6ef5acd8ec9567f424441b`
 
-**Dependency installation:** `uv sync --locked` — verifies `uv.lock` is consistent with `pyproject.toml` and fails if they've drifted.
+**Dependency installation/auditing:** `uv sync --locked` (fails on `uv.lock`/`pyproject.toml` drift); `uv audit` runs as a CI step, PR job only, built into uv 0.10.12+.
 
-**Dependency auditing:** `uv audit` runs as a CI step (PR job only). Built into uv 0.10.12+.
-
-**`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit on a docs-only PR — `cryptography`/`msgpack`). Fix is a narrow lockfile bump:
-```bash
-uv lock --upgrade-package cryptography --upgrade-package msgpack
-uv sync --locked
-```
-Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at root.
+**`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit twice: `cryptography`/`msgpack` on a docs PR, `snowflake-connector-python`/CVE-2026-15925 on a CI-rewrite PR). Fix is a narrow lockfile bump from repo root (`uv.lock` lives at root, not `rays_analytics/`): `uv lock --upgrade-package <name> && uv sync --locked`.
 
 **`sqlparse` CVEs suppressed, not fixed (August 2026, five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked (1.11.11, latest 1.12.2), blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`, which only applies while the library itself has no fix), most recently adding `GHSA-cfqr-cjx5-5jcm`. Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a future move to dbt-core v2/Fusion (drops sqlparse entirely) — not a reason to pull v2 forward while it's alpha/beta.
 
@@ -473,15 +468,15 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 #### Phase 5 — Orchestration and Observability — CORE, reversed to GitHub Actions August 2026
 
-**What was attempted:** self-hosted Dagster OSS on a DigitalOcean VPS via Docker Compose (webserver, daemon, user-code gRPC server, Postgres + Tailscale sidecar). Fully built and deployed: droplet provisioned/hardened, all five containers running clean, Tailscale sidecar joined the tailnet.
+**What was attempted:** self-hosted Dagster OSS on a DigitalOcean VPS via Docker Compose (webserver, daemon, user-code gRPC server, Postgres + Tailscale sidecar). Fully built and deployed — droplet provisioned/hardened, all five containers clean, Tailscale sidecar joined the tailnet.
 
-**Why it was abandoned:** the MLB Stats API blocks DigitalOcean's IP range at the CDN level — confirmed via multi-environment testing, not fixable from within the stack. The ingestion source itself is unreachable from a DigitalOcean-hosted process, so the VPS is a dead end regardless of orchestrator.
+**Why it was abandoned:** the MLB Stats API blocks DigitalOcean's IP range at the CDN level — confirmed via multi-environment testing, not fixable from within the stack. Unreachable from any DigitalOcean-hosted process, so the VPS is a dead end regardless of orchestrator.
 
-**Current goal:** GitHub Actions + dbt/dlt native tooling for production scheduling. Design not yet implemented — see Current Status. GitHub Actions keeps its existing PR/merge-time gate role in `ci.yml` either way.
+**Resolution:** production scheduling now runs on `games_pipeline.yml` (GitHub Actions + dbt/dlt native tooling) — see CI Architecture Notes. `ci.yml` keeps its unrelated PR/merge-time gate role.
 
-**Full detail preserved:** complete prior implementation + retrospective on `archive/phase-5-dagster-vps` (retrospective at `archive/phase-5-dagster-vps-retrospective.md`). Decision narrative, the daemon bug fixed along the way, and the IP-blocking discovery: CHANGELOG.md.
+**Full detail preserved:** complete prior implementation + retrospective on `archive/phase-5-dagster-vps`. Decision narrative, the daemon bug, and the IP-blocking discovery: CHANGELOG.md.
 
-**Skills locked in (still valid going forward):** Docker Compose multi-service stacks, Tailscale sidecar networking, VPS provisioning/hardening, Compose-environment credential handling, isolating a network-level blocker via multi-environment testing.
+**Skills locked in:** Docker Compose multi-service stacks, Tailscale sidecar networking, VPS provisioning/hardening, Compose-environment credential handling, isolating a network-level blocker via multi-environment testing.
 
 ---
 
@@ -528,11 +523,11 @@ Run from repo root, not the `rays_analytics/` subfolder — `uv.lock` lives at r
 
 **Phase 4 complete.** Phase 5's Dagster/VPS attempt is fully cleaned up off `main` — see Phase 5 above for why it was abandoned. The `orchestration/` directory, the `dagster`/`dagster-dbt`/`dagster-dlt`/`dagster-postgres` extra in `pyproject.toml`, and the Dagster-specific module-level objects in `pipelines/mlb_games.py` are removed; full prior implementation preserved on `archive/phase-5-dagster-vps`. `ci.yml` is Snowflake-only (September 2026); local `profiles.yml`/Makefile DuckDB scratchpad cleanup still not done.
 
-**Still open:** no cron/schedule exists today — `ci.yml` still runs on PR/push only.
+**Still open:** run-failure alerting for `games_pipeline.yml` not designed — a failed run just sits red in the Actions tab.
 
 **Next actions:**
-1. Design GitHub Actions-based production scheduling for the `games` dlt pipeline + dbt build (cron trigger, credential handling, run-failure alerting)
-2. Design "run succeeded but data is wrong" observability (zero-row pulls, stale/duplicate data) — no orchestrator-native asset checks anymore, so this needs its own approach (e.g. dbt tests/freshness checks run as a CI step, or Elementary)
+1. Design run-failure alerting for `games_pipeline.yml` (email/Slack/etc. on a failed scheduled run)
+2. Design "run succeeded but data is wrong" observability beyond the current sanity-only freshness check — no orchestrator-native asset checks anymore, needs its own approach (e.g. Elementary)
 3. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
 4. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
 
