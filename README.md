@@ -78,3 +78,4 @@ Two GitHub Actions workflows, both against Snowflake — no DuckDB in CI.
 **`ci.yml`** — every PR to `main` runs a full `dbt build` against a `DEV` schema; merging to `main` runs the same build against `PROD`. Both authenticate via key-pair, with the private key passed inline from a GitHub Secret rather than written to disk. Actions are pinned to exact commit hashes (not floating tags), and dependencies are audited against the OSV vulnerability database on every PR.
 
 **`games_pipeline.yml`** — a daily scheduled workflow (plus manual dispatch) that pulls the current season's games via the dlt pipeline, then runs a full `dbt build` against `PROD`. Guards against overlapping runs with a concurrency lock, and runs `dbt source freshness` as a sanity check before building — not yet a true staleness gate, since the ingestion step it follows always touches the load ledger regardless of whether new data actually showed up.
+<-- verifying rotated Snowflake CI key -->
