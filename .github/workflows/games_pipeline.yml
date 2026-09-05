@@ -1,0 +1,102 @@
+name: Games Pipeline
+
+on:
+  schedule:
+    # 6:47am Eastern daily — off top-of-hour, safely after even late West Coast
+    # games finish. timezone: field (GH Actions, March 2026+) handles DST automatically.
+    - cron: '47 6 * * *'
+      timezone: 'America/New_York'
+  workflow_dispatch: {}
+
+jobs:
+  run-games-pipeline:
+    name: Run games pipeline and dbt build against Snowflake PROD
+    runs-on: ubuntu-latest
+    # dlt catches SIGTERM for graceful shutdown mid-load — give it real headroom
+    timeout-minutes: 30
+    # Prevent a stray workflow_dispatch from racing the daily cron against
+    # Snowflake PROD. cancel-in-progress must stay false — dlt's SIGTERM
+    # handling is for graceful shutdown, not safe cancellation mid-load.
+    concurrency:
+      group: games-pipeline
+      cancel-in-progress: false
+
+    steps:
+      # 1. Check out main
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # 2. Install UV — pinned, matches ci.yml
+      - name: Install UV
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.17"
+          python-version: "3.12"
+
+      # 3. Venv at repo root, same as ci.yml
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # 4. Run the dlt pipeline against Snowflake. Credentials passed as
+      #    env vars in dlt's native DESTINATION__SNOWFLAKE__CREDENTIALS__*
+      #    convention — private_key is raw PEM content, no file written.
+      #    --seasons is computed at runtime, not hardcoded.
+      - name: Run games pipeline against Snowflake
+        env:
+          DESTINATION__SNOWFLAKE__CREDENTIALS__HOST: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          DESTINATION__SNOWFLAKE__CREDENTIALS__USERNAME: ${{ secrets.SNOWFLAKE_USER }}
+          DESTINATION__SNOWFLAKE__CREDENTIALS__PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          DESTINATION__SNOWFLAKE__CREDENTIALS__ROLE: SYSADMIN
+          DESTINATION__SNOWFLAKE__CREDENTIALS__DATABASE: RAYS_ANALYTICS
+          DESTINATION__SNOWFLAKE__CREDENTIALS__WAREHOUSE: COMPUTE_WH
+        run: |
+          source .venv/bin/activate
+          python pipelines/mlb_games.py --destination snowflake --seasons "$(date +%Y)"
+
+      # 5. Generate profiles.yml — same pattern as ci.yml's rewrite:
+      #    private_key inline from the secret, no key file on disk.
+      #    schema PROD, since this is the production scheduled run
+      #    (same role as ci.yml's push-to-main job).
+      - name: Generate profiles.yml
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << PROFILE
+          rays_analytics:
+            outputs:
+              prod:
+                type: snowflake
+                account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+                user: ${{ secrets.SNOWFLAKE_USER }}
+                private_key: "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}"
+                role: SYSADMIN
+                database: RAYS_ANALYTICS
+                warehouse: COMPUTE_WH
+                schema: PROD
+                threads: 4
+            target: prod
+          PROFILE
+
+      # 6. dbt deps — same venv-activation style as ci.yml
+      - name: Run dbt deps
+        run: |
+          source ../.venv/bin/activate
+          dbt deps
+        working-directory: rays_analytics
+
+      # 7. Sanity check, not a true staleness gate: games() does a full re-pull +
+      #    merge every run, so a successful step 4 always updates _dlt_loads —
+      #    this can't yet distinguish "genuinely new data" from "ran, found
+      #    nothing new." Revisit once a real incremental() cursor lands (see
+      #    Statcast plans).
+      - name: Run dbt source freshness
+        run: |
+          source ../.venv/bin/activate
+          dbt source freshness
+        working-directory: rays_analytics
+
+      # 8. Full build against PROD
+      - name: Run dbt build
+        run: |
+          source ../.venv/bin/activate
+          dbt build
+        working-directory: rays_analytics

@@ -13,17 +13,18 @@ Built for fun and education, not because anyone asked.
 | Layer | Tool |
 |---|---|
 | Ingestion | dlt |
-| Warehouse (local) | DuckDB |
 | Warehouse (cloud) | Snowflake |
 | Transformation | dbt Core |
+| Orchestration | GitHub Actions — PR/merge CI gate plus a daily scheduled production pipeline |
 | CI | GitHub Actions |
+
+DuckDB is still around, but demoted to an ad hoc local scratchpad — dbt no longer builds against it, only Snowflake.
 
 **Decided, not yet implemented:**
 
 | Layer | Tool | Status |
 |---|---|---|
-| Orchestration | GitHub Actions | Design not yet implemented — nothing schedules production data loads today (`ci.yml` runs on PR/push only, no cron) |
-| Observability | TBD | Not yet decided |
+| Observability | TBD | Not yet decided — a scheduled run failing or silently loading bad data isn't yet alerted on |
 
 **Planned (Phase 6+):**
 
@@ -51,17 +52,15 @@ make setup
 # Activate the virtual environment
 source .venv/bin/activate
 
-# Load data into local DuckDB
-python pipelines/mlb_games.py --destination duckdb
-
-# Run dbt against Snowflake (from repo root)
+# Run dbt against Snowflake (from repo root) — the only dbt build target
 make dbt-build
 
-# Or against local DuckDB
-make dbt-build-duckdb
+# Optional: load data into a local DuckDB file for ad hoc querying
+# (scratchpad only — dbt itself never builds against this)
+python pipelines/mlb_games.py --destination duckdb
 ```
 
-You'll need a `~/.dbt/profiles.yml` with `dev`/`dev_duck` targets — see [dbt profile docs](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles). The DuckDB target needs no credentials; the Snowflake `dev` target reads from a gitignored `.env` at repo root via `env_var()`.
+You'll need a `~/.dbt/profiles.yml` with a `dev` target pointed at Snowflake — see [dbt profile docs](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles). It reads from a gitignored `.env` at repo root via `env_var()`. A `dev_duck` target is optional, only needed if you want to query the scratchpad DuckDB file with dbt-adjacent tooling.
 
 ---
 
@@ -72,6 +71,10 @@ dbt model documentation is published to GitHub Pages:
 
 ---
 
-## CI
+## CI and scheduling
 
-Two-job pipeline on GitHub Actions. Every PR to `main` runs a DuckDB job — installs dependencies, runs `dbt build` against a local DuckDB file, and executes all tests. On merge to `main`, a second Snowflake job runs the same build against the real warehouse using key-pair authentication via GitHub Secrets. Actions are pinned to exact commit hashes (not floating tags) and dependencies are audited against the OSV vulnerability database on every run.
+Two GitHub Actions workflows, both against Snowflake — no DuckDB in CI.
+
+**`ci.yml`** — every PR to `main` runs a full `dbt build` against a `DEV` schema; merging to `main` runs the same build against `PROD`. Both authenticate via key-pair, with the private key passed inline from a GitHub Secret rather than written to disk. Actions are pinned to exact commit hashes (not floating tags), and dependencies are audited against the OSV vulnerability database on every PR.
+
+**`games_pipeline.yml`** — a daily scheduled workflow (plus manual dispatch) that pulls the current season's games via the dlt pipeline, then runs a full `dbt build` against `PROD`. Guards against overlapping runs with a concurrency lock, and runs `dbt source freshness` as a sanity check before building — not yet a true staleness gate, since the ingestion step it follows always touches the load ledger regardless of whether new data actually showed up.

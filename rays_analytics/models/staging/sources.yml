@@ -6,11 +6,11 @@ sources:
     schema: raw
     tables:
       - name: games
-        loaded_at_query: |
+        config:
+          loaded_at_query: |
             select max(l.inserted_at)
             from {{ source('mlb', '_dlt_loads') }} l
-            join {{ this }} t on t._dlt_load_id = l.load_id  
-        config:
+            join {{ this }} t on t._dlt_load_id = l.load_id
           freshness:
             warn_after: {count: 30, period: hour}
             error_after: {count: 48, period: hour}
