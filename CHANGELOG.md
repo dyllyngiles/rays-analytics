@@ -464,3 +464,31 @@ Note: `chore/split-claude-md-changelog` remains a separate open branch, not touc
 4. `CI_DEPLOYER` role-scoping + two-database (`RAYS_ANALYTICS_DEV`/`RAYS_ANALYTICS`) split — still designed, not implemented
 5. Decide the next data source to add — Statcast/pybaseball no longer assumed by default; the next source will also be the forcing function for a real dlt `incremental()` cursor, which would let the freshness check above finally distinguish "new data" from "nothing new"
 6. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+---
+
+### 2026-09-04 — Fourth ACCOUNTADMIN/SYSADMIN ownership gap, this time in `PROD`: schema ownership transferred to `SYSADMIN`
+
+**Summary:** the first real run of `games_pipeline.yml` against Snowflake `PROD` surfaced the ACCOUNTADMIN/SYSADMIN ownership gotcha (see Role Hierarchy & Privilege Notes) for a fourth time — the first three were caught during Phase 3/4 manual work, this one only showed up once a scheduled job actually tried to build against `PROD` for real.
+
+**What broke, in sequence:** the build failed first on `stg_games` (a view) with missing `CREATE VIEW` on `SCHEMA PROD`. After granting that, it failed again on `dim_teams`/`dim_venues` (tables) with missing `CREATE TABLE` on `SCHEMA PROD` — same root cause, different object type, surfacing one privilege at a time rather than all at once.
+
+**Fix — ownership transfer, not another one-off grant.** Patching a third individual privilege would just leave the same gap waiting for the next object type. Instead, transferred ownership of all three schemas (`RAW`, `DEV`, `PROD`) to `SYSADMIN` via `GRANT OWNERSHIP ... COPY CURRENT GRANTS`, run as `SECURITYADMIN` — granting/ownership changes are `SECURITYADMIN`'s domain even on a database whose objects are otherwise `SYSADMIN`-owned (see the domain-split note in Role Hierarchy & Privilege Notes). Ran `SHOW GRANTS` on all three schemas both before and after the transfer to confirm `COPY CURRENT GRANTS` preserved everything that existed and nothing was silently dropped. Re-ran the pipeline after the fix; it completed clean.
+
+**Side benefit:** this also simplifies the still-deferred `CI_DEPLOYER` least-privilege redesign (see CI Architecture Notes) — `SYSADMIN` now cleanly owns all three schemas outright, rather than ownership being scattered across `ACCOUNTADMIN`/`SYSADMIN` depending on which session originally created which object.
+
+---
+
+### 2026-09-04 — `games_pipeline.yml` first successful production run, Phase 5 closed for real
+
+**Summary:** with the schema-ownership fix above in place, `games_pipeline.yml` completed its first clean scheduled/dispatched run against Snowflake `PROD` — dlt `games` pipeline, `dbt deps`, `dbt source freshness`, then a full `dbt build`, all green. This closes Phase 5's last open item: the pipeline now runs on a real production schedule (6:47am Eastern daily, plus `workflow_dispatch`), not just PR/merge-time code-correctness checks.
+
+The concurrency guard and freshness-check-honesty fixes from the immediately prior session (`fix/games-pipeline-concurrency-and-freshness`) were already landed going into this run and needed no changes.
+
+**Next actions (updated):**
+1. Design run-failure alerting for `games_pipeline.yml` — a failed scheduled run currently just sits red in the Actions tab
+2. Design "run succeeded but data is wrong" observability beyond the current sanity-only freshness check — no orchestrator-native asset checks anymore, needs its own approach (e.g. Elementary)
+3. Wire up a comparison `manifest.json` for `ci.yml`'s PR-job `state:modified+`, once model count makes full builds expensive enough to justify it
+4. `CI_DEPLOYER` role-scoping + two-database (`RAYS_ANALYTICS_DEV`/`RAYS_ANALYTICS`) split — still designed, not implemented; now simpler since `SYSADMIN` owns all three schemas cleanly
+5. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
+6. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
