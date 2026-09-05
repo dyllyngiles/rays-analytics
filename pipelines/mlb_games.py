@@ -4,8 +4,11 @@ from collections.abc import Iterator
 from datetime import date
 
 import dlt
-import requests
 from dlt.extract import DltResource
+from dlt.pipeline.helpers import retry_load
+from dlt.sources.helpers import requests
+from tenacity import Retrying, stop_after_attempt, retry_if_exception, wait_exponential
+
 
 CURRENT_SEASON = date.today().year
 RAYS_TEAM_ID = 139
@@ -71,5 +74,13 @@ if __name__ == "__main__":
     else:
         pipeline = dlt.pipeline(pipeline_name="mlb_games", destination="snowflake", dataset_name="raw")
 
-    load_info = pipeline.run(mlb_stats_api(seasons=args.seasons))
+    for attempt in Retrying(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1.5, min=4, max=30),
+        retry=retry_if_exception(retry_load()),
+        reraise=True,
+    ):
+        with attempt:
+            load_info = pipeline.run(mlb_stats_api(seasons=args.seasons))
     print(load_info)
+        

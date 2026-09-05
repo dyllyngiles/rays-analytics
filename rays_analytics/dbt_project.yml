@@ -35,3 +35,6 @@ models:
       +materialized: view
     marts:
       +materialized: table
+
+vars:
+  'dbt_date:time_zone': 'America/New_York'

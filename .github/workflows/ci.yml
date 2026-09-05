@@ -10,7 +10,7 @@ on:
 
 jobs:
   dbt-build:
-    name: Load data and run dbt build
+    name: Run dbt build against Snowflake DEV
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
@@ -37,32 +37,39 @@ jobs:
       - name: Audit dependencies
         run: uv audit
 
-      # 6. Generate profiles.yml in the default ~/.dbt/ location
-      #    CI has no ~/.dbt/ directory — we create it and write the file
+      # 5. Generate profiles.yml in the default ~/.dbt/ location
+      #    CI has no ~/.dbt/ directory — we create it and write the file.
+      #    private_key is passed inline from the secret; no key file is written.
       - name: Generate profiles.yml
         run: |
           mkdir -p ~/.dbt
-          cat > ~/.dbt/profiles.yml << 'PROFILE'
+          cat > ~/.dbt/profiles.yml << PROFILE
           rays_analytics:
             outputs:
               dev:
-                type: duckdb
-                path: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
-                threads: 1
+                type: snowflake
+                account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+                user: ${{ secrets.SNOWFLAKE_USER }}
+                private_key: "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}"
+                role: SYSADMIN
+                database: RAYS_ANALYTICS
+                warehouse: COMPUTE_WH
+                schema: DEV
+                threads: 4
             target: dev
           PROFILE
 
-      # 7. Activate repo root venv and run the pipeline script
-      #    Creates and populates dev.duckdb that dbt models depend on
-      - name: Load MLB data into DuckDB
+      # 6. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then install packages.yml dependencies (e.g. dbt-expectations)
+      - name: Run dbt deps
         run: |
-          source .venv/bin/activate
-          python pipelines/mlb_games.py --destination duckdb
-        env:
-          DUCKDB_PATH: /home/runner/work/rays-analytics/rays-analytics/dev.duckdb
+          source ../.venv/bin/activate
+          dbt deps
+        working-directory: rays_analytics
 
-      # 8. Activate venv from one level up (../) since we're inside rays_analytics/
-      #    then run dbt build — compiles models, materializes them, runs all tests
+      # 7. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then run a full dbt build against Snowflake DEV. state:modified+
+      #    needs a comparison manifest that doesn't exist yet — see CLAUDE.md.
       - name: Run dbt build
         run: |
           source ../.venv/bin/activate
@@ -93,13 +100,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      # 4. Write the private key to a runner temp file — never echoed or logged
-      - name: Write Snowflake private key
-        run: echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > "$RUNNER_TEMP/ci_key.pem"
-             chmod 600 "$RUNNER_TEMP/ci_key.pem"
-
-      # 5. Generate profiles.yml in the default ~/.dbt/ location
-      #    CI has no ~/.dbt/ directory — we create it and write the file
+      # 4. Generate profiles.yml in the default ~/.dbt/ location
+      #    CI has no ~/.dbt/ directory — we create it and write the file.
+      #    private_key is passed inline from the secret; no key file is written.
       - name: Generate profiles.yml
         run: |
           mkdir -p ~/.dbt
@@ -110,7 +113,7 @@ jobs:
                 type: snowflake
                 account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
                 user: ${{ secrets.SNOWFLAKE_USER }}
-                private_key_path: $RUNNER_TEMP/ci_key.pem
+                private_key: "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}"
                 role: SYSADMIN
                 database: RAYS_ANALYTICS
                 warehouse: COMPUTE_WH
@@ -118,6 +121,14 @@ jobs:
                 threads: 4
             target: dev
           PROFILE
+
+      # 5. Activate venv from one level up (../) since we're inside rays_analytics/
+      #    then install packages.yml dependencies (e.g. dbt-expectations)
+      - name: Run dbt deps
+        run: |
+          source ../.venv/bin/activate
+          dbt deps
+        working-directory: rays_analytics
 
       # 6. Activate venv from one level up (../) since we're inside rays_analytics/
       #    then run dbt build — compiles models, materializes them, runs all tests
