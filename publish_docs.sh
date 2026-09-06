@@ -13,7 +13,7 @@ cp rays_analytics/target/catalog.json .
 cp rays_analytics/target/graph_summary.json .
 cp rays_analytics/target/run_results.json .
 cp rays_analytics/target/semantic_manifest.json .
-git add .
+git add index.html manifest.json catalog.json graph_summary.json run_results.json semantic_manifest.json
 git commit -m "Update dbt docs"
 git push origin gh-pages
 git checkout main
