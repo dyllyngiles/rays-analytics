@@ -492,3 +492,88 @@ The concurrency guard and freshness-check-honesty fixes from the immediately pri
 4. `CI_DEPLOYER` role-scoping + two-database (`RAYS_ANALYTICS_DEV`/`RAYS_ANALYTICS`) split — still designed, not implemented; now simpler since `SYSADMIN` owns all three schemas cleanly
 5. Decide the next data source to add — Statcast/pybaseball no longer assumed by default
 6. Phase 6: decide Lightdash vs. Metabase vs. keeping Cube+Evidence
+
+---
+
+### 2026-09-06 — Incident: `.env` leaked via `publish_docs.sh` to public `gh-pages`
+
+**What happened.** Running `publish_docs.sh` to refresh the dbt docs site
+triggered `git add .` while checked out on `gh-pages` — a branch whose
+`.gitignore` predated the July 2026 `.env` consolidation and had never been
+updated to match `main`'s. The ambient working tree's `.env`, plus two
+unrelated scratch files (`scratch/boxscore_exploration.py`,
+`scratch/phase-5-dagster-vps-retrospective.md`), got swept into the commit
+and pushed to `origin/gh-pages` — a public branch.
+
+**Severity, assessed honestly.** `.env` contained filesystem paths
+(`private_key_path`), account/database/warehouse/role identifiers, and one
+`TS_AUTHKEY` from the decommissioned Dagster/VPS setup — no raw private key
+material. Confirmed the Tailscale key was already inert (VPS long
+decommissioned). Real exposure, but categorically less severe than a live
+credential leaking: paths and identifiers are useless without the actual
+key files, which never left local disk. Treated as full-severity anyway
+during response — correct call, since severity wasn't knowable until after
+rotation was already underway.
+
+**Response — key rotation.** Generated new RSA key pairs for both
+`DBT_SERVICE_USER` and `RAYS_ANALYTICS_CI_SERVICE`, registered via
+`ALTER USER ... SET RSA_PUBLIC_KEY` (as `SECURITYADMIN` — granting/user
+management, not `SYSADMIN`'s domain), updated local `.pem` files and the
+`SNOWFLAKE_PRIVATE_KEY` GitHub Secret. Verified across all three
+surfaces before considering rotation complete: local (`dbt debug` against
+both `dev` and `ci_test` targets), CI (throwaway PR #43 against Snowflake
+`DEV`), and production (`games_pipeline.yml` manually triggered against
+`PROD`) — all green.
+
+**Complication — local `.env` deletion.** Mid-cleanup, an `rm -f .env`
+intended as a git-tracking removal deleted the actual working file from
+disk instead of `git rm --cached`. Recovered cleanly via
+`git show a3ad319:.env > .env`, since the file was still intact in the
+not-yet-rewritten `gh-pages` history at that point. No data lost, but a
+clear lesson: prefer `git rm --cached` explicitly over `rm -f` for any
+git-tracking-only removal, and don't chain destructive commands
+autonomously without a stop-and-confirm step for anything touching a
+tracked-elsewhere file.
+
+**Response — `gh-pages` history rewrite.** `.env` was found live in
+`gh-pages`' tip commit (`a3ad319`), not just old history — an isolated
+`/tmp` clone (never touching the main working tree, learned from the
+deletion incident) was rebuilt as a fresh single-commit orphan branch
+(`0143efd`) containing only the current clean docs snapshot, verified
+locally (`git log`, `git ls-tree`, absence from `git log --all
+--full-history -- .env` against the new branch's own reachable history)
+before force-pushing over the old `gh-pages`. Post-push, `origin/gh-pages`
+confirmed clean via direct inspection (not inferred), and the live Pages
+site confirmed still rendering (`curl -sI` → 200).
+
+**Response — root cause fix.** `publish_docs.sh`'s `git add .` (the actual
+mechanism that staged `.env`) replaced with an explicit list of the six
+docs-output files. `gh-pages`' own `.gitignore` brought in line with
+`main`'s. Verified against a real `./publish_docs.sh` run before merging
+(PR #44) — including working through a `non-fast-forward` push rejection
+(expected: local `gh-pages` predated the orphan rewrite) and a false alarm
+where a stray, never-pushed local commit (built on the pre-rewrite parent)
+briefly appeared to show `.env` still present — confirmed via
+`origin/gh-pages` inspection that the actual remote was clean throughout,
+then cleaned up the dangling local commit with `git reset --hard` +
+`git gc --prune=now`.
+
+**Outcome.** No credential compromise beyond the theoretical (paths/
+identifiers only, since-rotated regardless). `main` untouched throughout.
+`gh-pages` now a clean single-commit orphan branch with correct
+`.gitignore`. `publish_docs.sh` fixed at the root cause and verified
+against real execution, not just reviewed as a diff. Both service-user
+keys rotated and proven across local/CI/PROD.
+
+**Lessons carried forward:**
+- Any branch with its own working tree needs its own `.gitignore`
+  audited against `main`'s whenever `main`'s changes — branch-specific
+  `.gitignore` drift is a real, recurring risk class, not a one-off.
+- `git rm --cached`, never `rm -f`, for git-tracking-only removals.
+- Destructive multi-step git operations get a stop-and-confirm before
+  the irreversible step (force-push, hard reset) — not chained
+  autonomous execution, regardless of how routine the preceding steps
+  felt.
+- A script that does `git add .` on any branch is a latent leak
+  waiting for the right untracked file to be sitting in the working
+  directory at the wrong time — scope every automated `add` explicitly.

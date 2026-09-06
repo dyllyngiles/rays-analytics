@@ -60,7 +60,7 @@ I'm also deliberately going deep on platform-specific exploration (Query Profile
 - `--locked`: Resolves dependencies, then **fails if the result would differ from the committed `uv.lock`** — catches drift, the correct CI choice.
 - `--frozen`: Skips resolution entirely, installs whatever is in `uv.lock` without checking `pyproject.toml` — faster in deployment, doesn't catch drift.
 
-**Docker is not currently part of the stack (reversed back, August 2026).** It briefly ran via Docker Compose on a VPS for self-hosted Dagster; that whole approach was abandoned (see Phase 5) and the VPS decommissioned. The Mac Mini runs no containers, and nothing else currently needs Docker.
+**Docker is not currently part of the stack (reversed back, August 2026).** Ran briefly via Docker Compose on a VPS for self-hosted Dagster, abandoned (see Phase 5); VPS decommissioned. Mac Mini runs no containers.
 
 **`profiles.yml` lives at `~/.dbt/profiles.yml`** — never committed. Points to Snowflake DEV schema. `dev_duck` removed from `ci.yml` (September 2026); local `profiles.yml`/Makefile still carry it as an ad hoc scratchpad target.
 
@@ -382,6 +382,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration (not just Phase 8 CI) to control Snowflake credit spend now that DuckDB isn't free local compute (see DuckDB-dropped decision above). Full-project `dbt build` stays appropriate before opening a PR.
 - **Repo audited clean (June 2026)** via `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty) — worth re-running periodically.
 - **One-off exports never get committed** — `.gitignore` covers `/games_export.csv` and `/scratch/` for throwaway dumps.
+- **Every branch with its own working tree needs its own `.gitignore` kept synced with `main`'s (Sept 2026 `.env` leak on `gh-pages` — see CHANGELOG.md).** `publish_docs.sh` also fixed to stage an explicit file list instead of `git add .`.
 
 ---
 
@@ -397,7 +398,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Known gap:** `ci.yml` green means "code correct," not "Snowflake data fresh" — it doesn't re-run the dlt pipeline. That job is `games_pipeline.yml` now; see Current Status for what its freshness check does and doesn't prove.
 
-**Running under `SYSADMIN`, not scoped down (flagged July 2026, design only, not implemented):** broader than the job needs. Planned fix: a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, warehouse usage + schema-level create/write only) — replacing today's schema-only split in one database. Simpler starting point now that `SYSADMIN` cleanly owns all three schemas (ownership transfer, September 2026 — see CHANGELOG). Deprioritized behind the README/walkthrough and a baseball-question mart.
+**Running under `SYSADMIN`, not scoped down (flagged July 2026, design only, not implemented):** broader than the job needs. Planned fix: a two-database, two-role split — `RAYS_ANALYTICS_DEV`/`DEV_ROLE` (broad) and `RAYS_ANALYTICS`/`CI_DEPLOYER` (scoped, warehouse usage + schema-level create/write only). Simpler now that `SYSADMIN` cleanly owns all three schemas (September 2026). Deprioritized behind the README/walkthrough and a baseball-question mart.
 
 **Actions pinning:** All actions pinned to exact commit hashes, not floating tags — the March 2025 tj-actions/changed-files compromise (secrets leaked via a hijacked tag) is the canonical reason. Current pinned hashes:
 - `actions/checkout` v6.0.2 → `de0fac2e4500dabe0009e67214ff5f5447ce83dd`
@@ -405,7 +406,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 
 **Dependency install/audit:** `uv sync --locked` (fails on `uv.lock`/`pyproject.toml` drift); `uv audit` runs as a CI step, PR job only, built into uv 0.10.12+.
 
-**`uv audit` can fail a PR for reasons unrelated to that PR** — it audits whatever's pinned in `uv.lock`, so a newly-disclosed CVE against an already-resolved dependency can fail an unrelated change (hit twice: `cryptography`/`msgpack` on a docs PR, `snowflake-connector-python`/CVE-2026-15925 on a CI-rewrite PR). Fix is a narrow lockfile bump from repo root (`uv.lock` lives at root, not `rays_analytics/`): `uv lock --upgrade-package <name> && uv sync --locked`.
+**`uv audit` can fail a PR for reasons unrelated to that PR** — it audits `uv.lock`'s pins, so a newly-disclosed CVE elsewhere can fail an unrelated change (hit twice: `cryptography`/`msgpack` on a docs PR, `snowflake-connector-python`/CVE-2026-15925 on a CI-rewrite PR). Fix: `uv lock --upgrade-package <name> && uv sync --locked` from repo root (`uv.lock` lives at root, not `rays_analytics/`).
 
 **`sqlparse` CVEs suppressed, not fixed (five GHSAs as of September 2026):** dbt-core pins `sqlparse<0.6.0` on every release checked, blocking the patched 0.6.0 — not fixable by a dbt-core bump. Suppressed via `[tool.uv.audit] ignore = [...]` in `pyproject.toml` (plain `ignore`, not `ignore-until-fixed`). Tracking: `dbt-labs/dbt-core#12329`. Resolves via dbt-core relaxing the pin, or a move to dbt-core v2/Fusion (drops sqlparse) — not a reason to pull v2 forward while alpha/beta.
 
