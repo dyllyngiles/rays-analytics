@@ -8,6 +8,11 @@ on:
       timezone: 'America/New_York'
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   run-games-pipeline:
     name: Run games pipeline and dbt build against Snowflake PROD
@@ -100,3 +105,46 @@ jobs:
           source ../.venv/bin/activate
           dbt build
         working-directory: rays_analytics
+
+      # 9. Regenerate docs off this run's fresh manifest/catalog — same
+      #    steps as docs.yml's build job, so row_count/bytes/last_modified
+      #    stats reflect today's data, not just the last code push to main.
+      - name: Generate docs
+        run: |
+          source ../.venv/bin/activate
+          dbt docs generate
+        working-directory: rays_analytics
+
+      # Same explicit file list as docs.yml — only what the docs site serves.
+      - name: Stage docs site
+        run: |
+          mkdir -p ../docs-site
+          cd target
+          cp index.html manifest.json catalog.json ../../docs-site/
+        working-directory: rays_analytics
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload docs artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs-site
+
+  deploy-docs:
+    name: Deploy to GitHub Pages
+    needs: run-games-pipeline
+    runs-on: ubuntu-latest
+    # Same group as docs.yml's deploy job — only one Pages deploy can run
+    # at a time, so a daily-cron deploy and a merge-triggered deploy queue
+    # instead of racing each other.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
