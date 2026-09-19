@@ -193,7 +193,7 @@ Every bullet below is a one-line decision + reason. Full reasoning, alternatives
 
 - **GitHub repo:** github.com/dyllyngiles/rays-analytics
 - **dbt docs site:** dyllyngiles.github.io/rays-analytics
-- **Docs publish script:** `./publish_docs.sh` from project root — run after any model changes, before opening a PR
+- **Docs deploy:** automatic via `.github/workflows/docs.yml` on push to `main` (GitHub Actions Pages deploy, not a `gh-pages` branch) — no manual step needed
 
 ---
 
@@ -340,9 +340,9 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
     mlb_games.py                ← dlt pipeline, MLB Stats API → DuckDB/Snowflake (--destination flag)
   dev.duckdb                   ← local DuckDB file (gitignored)
   .env                         ← Snowflake creds shared by dbt + dlt (gitignored)
-  publish_docs.sh              ← publishes dbt docs to GitHub Pages
   CLAUDE.md, CHANGELOG.md
   .github/workflows/ci.yml     ← CI — runs on every PR to main
+  .github/workflows/docs.yml   ← builds dbt docs, deploys to GitHub Pages on push to main
   rays_analytics/               ← dbt project, all dbt commands run from here
     models/
       staging/  sources.yml, schema.yml, stg_games.sql
@@ -371,7 +371,6 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - Feature branch for every change, no direct commits to main
 - After `dbt run` — view compiled SQL in `target/compiled/` or use dbt Power User preview panel
 - Close DBeaver before running dbt or Python scripts (DuckDB single-connection limitation)
-- Run `./publish_docs.sh` after model changes, before opening a PR
 - Use `dbt --help` for command reference, not tldr
 - Python scripts run from project root, not the dbt subfolder
 - Never hardcode absolute file paths in Python scripts — use `os.getenv('VAR', 'relative/default')`
@@ -382,7 +381,7 @@ Snowflake credential fields are all `env_var()` calls pulled from a single gitig
 - **State-based selective builds as the default local workflow (decided August 2026):** `dbt build --select state:modified+` is now the default for local iteration (not just Phase 8 CI) to control Snowflake credit spend now that DuckDB isn't free local compute (see DuckDB-dropped decision above). Full-project `dbt build` stays appropriate before opening a PR.
 - **Repo audited clean (June 2026)** via `git log --all --oneline -- profiles.yml '*.pem' '*.key' '*.env'` (empty) — worth re-running periodically.
 - **One-off exports never get committed** — `.gitignore` covers `/games_export.csv` and `/scratch/` for throwaway dumps.
-- **Every branch with its own working tree needs its own `.gitignore` kept synced with `main`'s (Sept 2026 `.env` leak on `gh-pages` — see CHANGELOG.md).** `publish_docs.sh` also fixed to stage an explicit file list instead of `git add .`.
+- **`.env` leak on `gh-pages` (Sept 2026) — remediated:** history scrubbed via `git filter-repo`, credentials rotated, manual `publish_docs.sh` flow replaced by `.github/workflows/docs.yml`. Full narrative: CHANGELOG.md.
 
 ---
 
